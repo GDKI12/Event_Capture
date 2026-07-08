@@ -15,71 +15,27 @@
 #include <QDateTime>
 
 #include "config.h"
-
+#include "define.h"
 class CamWorker : public QObject
 {
     Q_OBJECT
 public:
-    explicit CamWorker(const QString& camId, const Config& config, QObject* parent = nullptr);
-    ~CamWorker();
+    explicit CamWorker(const QString& camId, int port, QObject* parent = nullptr);
+    void addRawFiles(const QString&);
+    int getPort();
+    QString getCamId();
+    int rawFileSize();
+    QVector<QString> getRawFiles(int, int);
 
-    bool ensureFfmpegRunning();
-    void stopFfmpeg();
-    void stop();
-
-    void showEncoding();
-signals:
-    void outInfo(const QString& info, LogLevel logLevel = LogLevel::INFO);
-    void outWarn(const QString& warn, LogLevel logLevel = LogLevel::WARN);
-    void outError(const QString& error, LogLevel logLevel = LogLevel::ERROR);
-
-public slots:
-    void onFileSystemChanged(const QString& path);
-    void getAnswer(QByteArray data);
-    void onWrite(const QString& content, LogLevel logLevel);
-private:
-    void loadSensor();
-    void getConfig();
-    void start();
-    void rootScan();
-    void requestCreateClip();
-    void init();
-    void sendClip(const QVector<QString>&);
 
 private:
-    QString id;
-    QFileSystemWatcher watcher;
-
-//    QTimer timer;
-    int frames;
-    // setting params
-    QString rootPath;
+    QString camId;
     QString dstIp;
     int dstPort;
     int metaPort;
-    int timeInterval;
-    int videoLength;
-    bool mode;
-    int width;
-    int height;
 
-    QQueue<QString> sensorDirs;
     QQueue<QString> rawFiles;
 
-    QSet<QString> preSensors;
-
-    QSet<QString> trashList;
-    QSet<QString> saveList;
-
-    QString currDir;
-    int frameIndex;
-
-    QTcpSocket* socket;
-    QProcess* ffmpeg;
-
-    QVector<qint64> encodingTimes;
-
-    int ctn;
 };
 
 #endif // CAMWORKER_H

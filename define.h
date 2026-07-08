@@ -1,26 +1,29 @@
 #ifndef DEFINE_H
 #define DEFINE_H
 
-#include <QDateTime>
 #include <QObject>
+#include <QDateTime>
 #include <QDebug>
+
 enum class LogLevel{
     INFO, WARN, ERROR
 };
 
-Q_DECLARE_METATYPE(LogLevel)
-
-
-struct ClipInfo
+struct InitConfig
 {
-    QString camName;
-    QString sensorName;
-    QString videoPath;
-    QStringList weather;
-    QStringList event;
+    int camSize;
+    int videoLength;
+    int fps;
 };
 
+struct VssInfo
+{
+    QVector<quint8> isEvent;
+    QVector<quint8> weather;
+    QVector<quint8> eventType;
+};
 
+Q_DECLARE_METATYPE(LogLevel)
 
 class Writter
 {
@@ -52,5 +55,4 @@ public:
       write(content, LogLevel::ERROR);
   }
 };
-
 #endif // DEFINE_H

@@ -1,5 +1,5 @@
-#ifndef DEFINE_H
-#define DEFINE_H
+#ifndef CONFIG_H
+#define CONFIG_H
 
 #include <iostream>
 #include <opencv2/core/core.hpp>
@@ -16,13 +16,9 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
-const QString DEFAULT_PATH = "/home/tesla/cscho/Auto_Capture_v4/config.toml";
-const QString FILE_NAME = "config.toml";
+const QString DEFAULT_PATH = "../config/config.toml";
 const QString SENSOR_LIST_FILE = "/home/tesla/EdgeInfravision/EdgeInfra_Capture_v4/config/sensor_list.json";
 
-enum class LogLevel{
-    INFO, WARN, ERROR
-};
 
 class Config
 {
@@ -33,6 +29,9 @@ public:
     {
         try
         {
+            QFile file(DEFAULT_PATH);
+            if(file.exists())
+                qDebug() <<"";
             auto data = toml::parse(DEFAULT_PATH.toStdString());
 
             std::string cRootPath;
@@ -45,9 +44,8 @@ public:
             ip = QString::fromStdString(cDstIp);
 
             port = toml::find<int>(data, "setting","dst_port");
-
             timeInterval = toml::find<int>(data, "setting","time_interval");
-            timeInterval *= 1000;
+            timeInterval *= 10;
 
             videoLength = toml::find<int>(data, "setting","video_length");
             videoLength = videoLength * 10;
@@ -56,8 +54,6 @@ public:
             width = toml::find<int>(data, "setting", "width");
             height = toml::find<int>(data, "setting", "height");
 
-            rawSize = toml::find<int>(data, "setting", "save_data_time");
-            rawSize *= 1000;
             QFile snesorListFile(SENSOR_LIST_FILE);
 
 
@@ -79,6 +75,6 @@ public:
     int rawSize;
 };
 
-#endif // DEFINE_H
+#endif // CONFIG_H
 
 
