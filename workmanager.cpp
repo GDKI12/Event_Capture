@@ -222,12 +222,15 @@ void WorkManager::start()
         }
     }
 
-    Writter::info(QString("Current Dir : %1").arg(currDir));
 
     for(int i = 0; i < camN; i++)
     {
         QVector<QString> clips
                 = camWorkers[QString("cam%1").arg(i+1)]->getRawFiles(timeInterval, videoLength);
+
+        int n = camWorkers[QString("cam%1").arg(i+1)]->rawFileSize() / videoLength;
+        Writter::info(QString("Current Dir : %1, Left : %2").arg(QString("%1/cam%2").arg(currDir, QString::number(i+1)), QString::number(n)));
+
         sendClip(clips, camWorkers[QString("cam%1").arg(i+1)].get());
     }
 
