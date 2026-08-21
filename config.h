@@ -35,12 +35,15 @@ public:
             auto data = toml::parse(DEFAULT_PATH.toStdString());
 
             std::string cRootPath;
+            std::string cSavePath;
             std::string cDstIp;
 
             cRootPath = toml::find<std::string>(data, "setting", "root_path");
+            cSavePath = toml::find<std::string>(data, "setting", "save_path");
             cDstIp = toml::find<std::string>(data, "setting","dst_ip");
 
             rootPath = QString::fromStdString(cRootPath);
+            savePath = QString::fromStdString(cSavePath);
             ip = QString::fromStdString(cDstIp);
 
             port = toml::find<int>(data, "setting","dst_port");
@@ -65,6 +68,7 @@ public:
     }
 public:
     QString rootPath;
+    QString savePath;
     QString ip;
     int port;
     int videoLength;
