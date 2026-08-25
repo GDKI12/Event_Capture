@@ -53,6 +53,10 @@ struct Mission{
     Volume volume;
 };
 
+struct RawFileInfo{
+    int index;
+    QString fileName;
+};
 
 Q_DECLARE_METATYPE(LogLevel)
 

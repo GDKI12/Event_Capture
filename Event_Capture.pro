@@ -30,14 +30,19 @@ LIBS += -L/usr/local/lib -lopencv_world
 LIBS += -L/usr/local/lib -liceoryx_hoofs -liceoryx_platform -liceoryx_posh -liceoryx_posh_config -liceoryx_posh_gateway -liceoryx_posh_roudi
 
 SOURCES += \
+    apicontroller.cpp \
     camworker.cpp \
     main.cpp \
+    vsslogger.cpp \
     workmanager.cpp
 
 HEADERS += \
+    vssProtocol.h \
+    apicontroller.h \
     camworker.h \
     config.h \
     define.h \
+    vsslogger.h \
     workmanager.h
 
 # Default rules for deployment.

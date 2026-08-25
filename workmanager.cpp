@@ -2,11 +2,11 @@
 
 #include <QDataStream>
 #include <QElapsedTimer>
+
 WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(parent)
 {
     vssSocket = new QTcpSocket(this);
 
-    metaSocket = new QTcpSocket(this);
     ffmpeg = new QProcess(this);
 
     config.loadConfig();
@@ -17,7 +17,6 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
     dstIp = config.ip;
 
     dstPort = config.port;
-    metaPort = dstPort + 100;
     initPort = 4303;
     timeInterval = config.timeInterval;
 
@@ -29,13 +28,40 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
 
     frames = timeInterval / 100;
     int idx = 0;
+
+    receivedN = 0;
+
     for(QString name : cams)
     {
         camWorkers[name] = std::make_shared<CamWorker>(name, dstPort + idx, this);
+
+        QTcpSocket* socket = new QTcpSocket(this);
+        videoSockets.insert(name, socket);
+
+        QTimer* resultTimer = new QTimer(this);
+        resultTimer->setSingleShot(true);
+        resultTimers.insert(name, resultTimer);
+
+        connect(resultTimer, &QTimer::timeout,
+                this, [this, name]() { onResultTimeout(name); });
+
+        connect(socket, &QTcpSocket::readyRead,
+                this, [this, name]() { readServerResult(name); });
+
+        connect(socket,
+                static_cast<void(QTcpSocket::*)(QAbstractSocket::SocketError)>
+                    (&QTcpSocket::error),
+                this,
+                [socket, name](QAbstractSocket::SocketError) {
+            Writter::error(QString("Video socket error (%1): %2")
+                           .arg(name, socket->errorString()));
+        });
+
+        connect(socket, &QTcpSocket::disconnected,
+                this, [this, name]() { onVideoDisconnected(name); });
         idx++;
     }
     connect(this, &WorkManager::requestToSave, this, &WorkManager::saveSensorData);
-    connect(this, &WorkManager::receivedMission, this, &WorkManager::init);
     connect(this, &WorkManager::requestToProcessSensor, this, &WorkManager::onProcessSensor);
     connect(&watcher, &QFileSystemWatcher::directoryChanged, this, &WorkManager::onFileSystemChanged);
 
@@ -47,90 +73,63 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
             [=](QAbstractSocket::SocketError){
         Writter::error(QString("VSS socket error: %1").arg(vssSocket->errorString()));
     });
-    connect(metaSocket, &QTcpSocket::readyRead, this, [=]()
-    {
-        // TODO
-        Writter::info("GET DATA");
-    });
-
     connect(vssSocket, &QTcpSocket::readyRead, this, [=](){
         QByteArray data = vssSocket->readAll();
         QJsonDocument doc = QJsonDocument::fromJson(data);
         QJsonObject obj = doc.object();
-        bool result = false;
-
-        if(data.contains("isReady"))
-            result = obj["isReady"].toBool();
-
-        if(!data.contains("isReady"))
-        {
-            getVssInfos(data);
-            start();
-        }
-        else
-        {
-            qDebug() << "";
-            Writter::info(QString("Receive replies from VSS_Server: %1").arg(QString::fromUtf8(data)));
-            if(result)
-                start();
-        }
+        qDebug() << "VSS control response:" << obj;
     });
 
-    initMissionServer();
+    Mission mission;
+    Condition condition;
+    Scenario scenario;
+    Volume volume;
+    condition.weather.append("clear");
+    condition.time.append("daytime");
+    condition.roadEnv.append("urban_local");
+    scenario.scenario.append("lane_keep");
+    volume.clipLengthSec = 10;
+    volume.targetScenes = 5;
+
+    mission.deviceType = "infra";
+    mission.conditions = condition;
+    mission.bestEffort = scenario;
+    mission.volume = volume;
+
+    init(mission);
+
 }
 
 WorkManager::~WorkManager()
 {
-    closeMetaSocket();
-
-    metaSocket->deleteLater();
+    stopping = true;
+    for (QTimer* timer : resultTimers)
+        timer->stop();
+    closeVideoSockets();
     ffmpeg->deleteLater();
 }
 
-void WorkManager::initMissionServer()
-{
-    connect(&server, &QTcpServer::newConnection, [this](){
-        QTcpSocket* socket = server.nextPendingConnection();
-
-        Writter::info(QString("Client connected IP: %1").arg(socket->peerAddress().toString()));
-        connect(socket, &QTcpSocket::readyRead,[this, socket](){
-           receiveBuffer.append(socket->readAll());
-           processReceiveData();
-        });
-
-        connect(socket, &QTcpSocket::disconnected, socket, &QTcpSocket::deleteLater);
-    });
-
-    if (!server.listen(QHostAddress::AnyIPv4, 8000))
-    {
-        Writter::error(
-        QString("Mission server listen failed: %1")
-              .arg(server.errorString())
-        );
-    }else
-    {
-        Writter::info("Mission server listening on port 8000");
-    }
-
-}
 
 void WorkManager::init(const Mission& mission)
 {
-    //부여받은 미션의 비디오 길이로 설정
-    videoLength = mission.volume.clipLengthSec;
-
     Writter::info("Start to initialize");
 
     QDir dir(rootPath);
     QFileInfoList infos = dir.entryInfoList({"Sensor_Data*"}, QDir::Dirs | QDir::NoDotAndDotDot,
                                             QDir::Name);
 
+    if(infos.isEmpty())
+    {
+        Writter::warn("There is no sensor data");
+        return;
+    }
+
     for(const QFileInfo& fi : infos)
         sensorDirs.enqueue(fi.absoluteFilePath());
 
     QString firstSensorDirPath = sensorDirs.first();
     QDir firstSensorDir(firstSensorDirPath);
-    QStringList camList = firstSensorDir.entryList({"cam*"}, QDir::Dirs | QDir::NoDotAndDotDot);
+    QStringList camList = firstSensorDir.entryList({"cam?"}, QDir::Dirs | QDir::NoDotAndDotDot);
 
     camN = camList.size();
 
@@ -150,6 +149,8 @@ void WorkManager::init(const Mission& mission)
     }
 
     Writter::info("Success to initialize, start to send video");
+
+    start();
 }
 
 
@@ -228,100 +229,6 @@ void WorkManager::onFileSystemChanged(const QString& path)
 
 }
 
-void WorkManager::processReceiveData()
-{
-    constexpr int HEADER_SIZE = sizeof(quint32);
-
-    while(true)
-    {
-        if(receiveBuffer.size() < HEADER_SIZE)
-            return;
-
-        QDataStream stream(receiveBuffer);
-        stream.setByteOrder(QDataStream::BigEndian);
-
-        quint32 jsonSize;
-        stream >> jsonSize;
-
-        if(receiveBuffer.size() < HEADER_SIZE + jsonSize)
-            return;
-
-        QByteArray jsonData = receiveBuffer.mid(HEADER_SIZE, jsonSize);
-
-        // Delete processed packet
-        receiveBuffer.remove(0, HEADER_SIZE + jsonSize);
-
-        // JSON Parsing
-        QJsonParseError error;
-        QJsonDocument doc = QJsonDocument::fromJson(jsonData, &error);
-
-        if (error.error != QJsonParseError::NoError)
-        {
-            qDebug() << "JSON Parse Error:"
-                     << error.errorString();
-            continue;
-        }
-
-        if (!doc.isObject())
-            continue;
-
-        QJsonObject json = doc.object();
-
-        Condition conditions;
-        Scenario bestEffort;
-        Volume volume;
-
-        QJsonObject bestEffortObj = json["bestEffort"].toObject();
-
-        QJsonArray scenarioArr = bestEffortObj["scenario"].toArray();
-        QList<QString> scenarioList;
-
-        for(const QJsonValue &value : scenarioArr)
-            scenarioList.append(value.toString());
-
-        // bestEffort
-        bestEffort.scenario = scenarioList;
-
-        QJsonObject conditionObj = json["conditions"].toObject();
-
-        QJsonArray roadEnvArr = conditionObj["roadEnv"].toArray();
-        QJsonArray timeArr = conditionObj["time"].toArray();
-        QJsonArray weatherArr = conditionObj["weather"].toArray();
-
-        QList<QString> roadList;
-        QList<QString> timeList;
-        QList<QString> weatherList;
-
-        for(const QJsonValue& value : roadEnvArr)
-            roadList.append(value.toString());
-
-        for(const QJsonValue& value : timeArr)
-            timeList.append(value.toString());
-
-        for(const QJsonValue& value : weatherArr)
-            weatherList.append(value.toString());
-
-        conditions.weather = weatherList;
-        conditions.time = timeList;
-        conditions.roadEnv = roadList;
-
-        QJsonObject volumeObj = json["volume"].toObject();
-        int clipLengthSec = volumeObj["clipLengthSec"].toInt();
-        int targetScenes = volumeObj["targetScenes"].toInt();
-        volume.clipLengthSec = clipLengthSec;
-        volume.targetScenes = targetScenes;
-
-        QString deviceType = json["deviceType"].toString();
-
-        mission.deviceType = deviceType;
-        mission.conditions = conditions;
-        mission.bestEffort = bestEffort;
-        mission.volume = volume;
-
-        emit receivedMission(mission);
-
-    }
-}
 
 void WorkManager::start()
 {
@@ -349,14 +256,24 @@ void WorkManager::start()
 
     if(sensorDirs.isEmpty() && !camValid[0])
     {
-        emit requestToProcessSensor(currDir);
+
+        for(int i = 1 ; i < camN+1; i++)
+        {
+            // 파일을 지울지말지 판단하는 부분
+            QString camId = QString("cam%1").arg(i);
+        }
         Writter::info("No sensor dir in queue");
         return;
     }else
     {
         if(isChange)
         {
-            emit requestToProcessSensor(currDir);
+
+            for(int i = 1 ; i < camN+1; i++)
+            {
+                // 파일을 지울지말지 판단하는 부분
+                QString camId = QString("cam%1").arg(i);
+            }
 
             currDir = sensorDirs.dequeue();
             for(int i = 1 ; i < camN+1; i++)
@@ -372,7 +289,6 @@ void WorkManager::start()
 
         int n = camWorkers[QString("cam%1").arg(i+1)]->rawFileSize() / videoLength;
         Writter::info(QString("Current Dir : %1, Left : %2").arg(QString("%1/cam%2").arg(currDir, QString::number(i+1)), QString::number(n)));
-
         sendClip(clips, camWorkers[QString("cam%1").arg(i+1)].get());
     }
 
@@ -381,8 +297,11 @@ void WorkManager::start()
 
 void WorkManager::stop()
 {
-    closeMetaSocket(-1);
-    metaSocket->deleteLater();
+    stopping = true;
+    for (QTimer* timer : resultTimers)
+        timer->stop();
+
+    closeVideoSockets(-1);
 
     closeVssSocket(-1);
     vssSocket->deleteLater();
@@ -398,36 +317,66 @@ void WorkManager::stop()
 
 void WorkManager::sendClip(const QVector<QString> &clips, CamWorker* camWorker)
 {
-    int metaPort = camWorker->getPort() + 100;
-    QString metaLog = QString("Send %1 meta port : %2").arg(camWorker->getCamId()).arg(metaPort);
-    Writter::info(metaLog);
-
-    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhMMss");
-
-    closeMetaSocket();
-    metaSocket->connectToHost(dstIp, metaPort);
-
-    if(!metaSocket->waitForConnected(3000))
+    if (!camWorker)
         return;
 
-    // Send Meta Info
+    const QString camId = camWorker->getCamId();
+    const QString requestId =
+            QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    pendingRequestIds[camId] = requestId;
+    timeoutCounts[camId] = 0;
+    receivedCams.remove(camId);
+
+    QTcpSocket* activeSocket = nullptr;
+    const auto failRequest =
+            [this, camId, requestId, &activeSocket](const QString& reason) {
+        // VIDEO_END 전에 실패하면 연결을 끊어 서버 FFmpeg도 즉시 정리시킨다.
+        if (activeSocket &&
+            activeSocket->state() != QAbstractSocket::UnconnectedState)
+            activeSocket->abort();
+
+        completeCameraRequest(camId, requestId, false, reason);
+    };
+
+    if (clips.isEmpty()) {
+        failRequest("Clip list is empty");
+        return;
+    }
+
+    Writter::info(QString("Send %1 on single socket port %2")
+                  .arg(camId)
+                  .arg(camWorker->getPort()));
+
+    QTcpSocket* socket = ensureVideoSocket(camWorker);
+    activeSocket = socket;
+    if (!socket) {
+        failRequest("Video socket connection failed");
+        return;
+    }
+
+    // 동일한 영상 소켓에서 META -> VIDEO_CHUNK -> VIDEO_END 순서로 보낸다.
     QJsonObject obj;
     QDir dir(currDir);
 
-    obj["videoName"] = QString("%1_%2_%3.mp4").arg(dir.dirName(), camWorker->getCamId(), timestamp);
+    obj["sensorName"] = dir.dirName();
+    obj["camId"] = camId;
+    obj["requestId"] = requestId;
 
-    QByteArray header = QJsonDocument(obj).toJson(QJsonDocument::Compact);
-    header.append("\n");
+    const QByteArray metadata =
+            QJsonDocument(obj).toJson(QJsonDocument::Compact);
 
-    metaSocket->write(header);
-
-    if (!metaSocket->waitForBytesWritten(3000))
-        closeMetaSocket();
-
-    closeMetaSocket();
-
-    if(!ensureFfmpegRunning(camWorker))
+    if (!sendFramedPacket(socket,
+                          VssProtocol::PacketType::Meta,
+                          metadata)) {
+        failRequest("Failed to send meta info");
         return;
+    }
+
+    if(!ensureFfmpegRunning()) {
+        failRequest("Failed to start video sender");
+        return;
+    }
 
     qint64 rawBytes = (qint64) width * height;
     QByteArray frame(rawBytes, Qt::Uninitialized);
@@ -437,7 +386,11 @@ void WorkManager::sendClip(const QVector<QString> &clips, CamWorker* camWorker)
     for(const QString& file : clips)
     {
         QFile in(file);
-        if(!in.open(QIODevice::ReadOnly)) continue;
+        if(!in.open(QIODevice::ReadOnly)) {
+            stopFfmpeg();
+            failRequest(QString("Failed to open raw file: %1").arg(file));
+            return;
+        }
 
         qint64 readBytes = in.read(frame.data(), rawBytes);
 
@@ -451,6 +404,7 @@ void WorkManager::sendClip(const QVector<QString> &clips, CamWorker* camWorker)
             Writter::error(log);
 
             stopFfmpeg();
+            failRequest(log);
             return;
         }
 
@@ -461,32 +415,96 @@ void WorkManager::sendClip(const QVector<QString> &clips, CamWorker* camWorker)
             qint64 chunk = ffmpeg->write(frame.constData() + written, frame.size() - written);
             if(chunk < 0)
             {
+                const QString error = ffmpeg->errorString();
                 stopFfmpeg();
+                failRequest(QString("FFmpeg write failed: %1").arg(error));
                 return;
             }
 
             written += chunk;
 
-            if(!ffmpeg->waitForBytesWritten(-1))
+            if (!drainFfmpegOutput(socket)) {
+                stopFfmpeg();
+                failRequest("Failed to send encoded video chunk");
+                return;
+            }
+
+            if(!ffmpeg->waitForBytesWritten(30000))
             {
                 qCritical() << "[ERROR] Failt to flush ffmpeg stdin flush:" << in.fileName();
                 qCritical() << "[ERROR] state =" << ffmpeg->state();
                 qCritical() << "[ERROR] exitCode =" << ffmpeg->exitCode();
                 qCritical() << "[ERROR] error =" << ffmpeg->errorString();
 
+                const QString error = ffmpeg->errorString();
                 stopFfmpeg();
+                failRequest(QString("FFmpeg write timeout: %1").arg(error));
+                return;
+            }
+
+            if (!drainFfmpegOutput(socket)) {
+                stopFfmpeg();
+                failRequest("Failed to send encoded video chunk");
                 return;
             }
 
         }
     }
 
-    if (ffmpeg->state() != QProcess::Running)
+    if (ffmpeg->state() != QProcess::Running) {
+        failRequest("FFmpeg stopped before clip completion");
         return;
+    }
 
-    stopFfmpeg();
+    ffmpeg->closeWriteChannel();
 
-    Writter::info(QString("Success to send clip of %1").arg(camWorker->getCamId()));
+    QElapsedTimer finishTimer;
+    finishTimer.start();
+
+    while (ffmpeg->state() != QProcess::NotRunning)
+    {
+        ffmpeg->waitForReadyRead(100);
+
+        if (!drainFfmpegOutput(socket)) {
+            stopFfmpeg();
+            failRequest("Failed to flush encoded video");
+            return;
+        }
+
+        if (finishTimer.elapsed() > 60000) {
+            stopFfmpeg();
+            failRequest("FFmpeg finish timeout");
+            return;
+        }
+    }
+
+    if (!drainFfmpegOutput(socket)) {
+        failRequest("Failed to send final encoded video chunk");
+        return;
+    }
+
+    if (ffmpeg->exitStatus() != QProcess::NormalExit ||
+        ffmpeg->exitCode() != 0) {
+        failRequest(QString("FFmpeg exited with code %1: %2")
+                    .arg(ffmpeg->exitCode())
+                    .arg(QString::fromUtf8(ffmpeg->readAllStandardError())));
+        return;
+    }
+
+    if (!sendFramedPacket(socket,
+                          VssProtocol::PacketType::VideoEnd,
+                          QByteArray())) {
+        failRequest("Failed to send video end packet");
+        return;
+    }
+
+    Writter::info(QString("Success to send clip of %1, requestId=%2")
+                  .arg(camId, requestId));
+
+    QTimer* resultTimer = resultTimers.value(camId, nullptr);
+    if (resultTimer)
+        resultTimer->start(RESULT_TIMEOUT_MS);
+
     return;
 }
 
@@ -548,35 +566,89 @@ void WorkManager::sendToServer(int channel, const Mission& mission, int fps)
 
 
 }
-bool WorkManager::ensureFfmpegRunning(CamWorker* camWorker)
+bool WorkManager::ensureFfmpegRunning()
 {
     if(ffmpeg->state() == QProcess::Running)
         return true;
-    const QString url = QString("tcp://%1:%2").arg(dstIp).arg(camWorker->getPort());
-          const QStringList args = {
-              "-f", "rawvideo",
-              "-loglevel", "error",
-              "-pixel_format", "bayer_rggb8",
-              "-video_size", QString("%1x%2").arg(width).arg(height),
-              "-framerate", "10",
-              "-i", "pipe:0",
-              "-vf", "format=bgr24",
-              "-c:v", "libx264",
-              "-preset", "veryfast",
-              "-tune", "zerolatency",
-              "-pix_fmt", "yuv420p",
-              "-f", "mpegts",
-              url
-          };
+
+    const QStringList args = {
+        "-f", "rawvideo",
+        "-loglevel", "error",
+        "-pixel_format", "bayer_rggb8",
+        "-video_size", QString("%1x%2").arg(width).arg(height),
+        "-framerate", "10",
+        "-i", "pipe:0",
+        "-vf", "format=bgr24",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-tune", "zerolatency",
+        "-pix_fmt", "yuv420p",
+        "-f", "mpegts",
+        "pipe:1"
+    };
 
     ffmpeg->setProgram("ffmpeg");
     ffmpeg->setArguments(args);
     ffmpeg->setProcessChannelMode(QProcess::SeparateChannels);
     ffmpeg->start();
 
-    if(!ffmpeg->waitForStarted(-1))
+    if(!ffmpeg->waitForStarted(30000))
     {
       return false;
+    }
+
+    return true;
+}
+
+bool WorkManager::drainFfmpegOutput(QTcpSocket* socket)
+{
+    QByteArray output = ffmpeg->readAllStandardOutput();
+    int offset = 0;
+
+    while (offset < output.size())
+    {
+        const int size = qMin(VssProtocol::VideoChunkSize,
+                              output.size() - offset);
+        const QByteArray chunk = output.mid(offset, size);
+
+        if (!sendFramedPacket(socket,
+                              VssProtocol::PacketType::VideoChunk,
+                              chunk))
+            return false;
+
+        offset += size;
+    }
+
+    return true;
+}
+
+bool WorkManager::sendFramedPacket(QTcpSocket* socket,
+                                   VssProtocol::PacketType type,
+                                   const QByteArray& payload,
+                                   int timeoutMs)
+{
+    if (!socket ||
+        socket->state() != QAbstractSocket::ConnectedState ||
+        payload.size() > static_cast<int>(VssProtocol::MaxPayloadSize))
+        return false;
+
+    const QByteArray packet = VssProtocol::makePacket(type, payload);
+    if (socket->write(packet) != packet.size())
+        return false;
+
+    const qint64 queueLimit =
+            type == VssProtocol::PacketType::VideoChunk
+            ? 4 * 1024 * 1024
+            : 0;
+
+    QElapsedTimer timer;
+    timer.start();
+
+    while (socket->bytesToWrite() > queueLimit)
+    {
+        const int remaining = timeoutMs - static_cast<int>(timer.elapsed());
+        if (remaining <= 0 || !socket->waitForBytesWritten(remaining))
+            return false;
     }
 
     return true;
@@ -595,28 +667,272 @@ void WorkManager::stopFfmpeg()
     ffmpeg->waitForFinished();
 }
 
-void WorkManager::closeMetaSocket(int timeoutMs)
+QTcpSocket* WorkManager::ensureVideoSocket(CamWorker* camWorker)
 {
-    if(!metaSocket || metaSocket->state() == QAbstractSocket::UnconnectedState)
+    if (!camWorker)
+        return nullptr;
+
+    const QString camId = camWorker->getCamId();
+    QTcpSocket* socket = videoSockets.value(camId, nullptr);
+    if (!socket)
+        return nullptr;
+
+    if (socket->state() == QAbstractSocket::ConnectedState)
+        return socket;
+
+    if (socket->state() != QAbstractSocket::UnconnectedState)
+        socket->abort();
+
+    const quint16 port = static_cast<quint16>(camWorker->getPort());
+    socket->connectToHost(dstIp, port);
+
+    if (!socket->waitForConnected(3000)) {
+        Writter::error(QString("Video connect failed (%1:%2): %3")
+                       .arg(camId)
+                       .arg(port)
+                       .arg(socket->errorString()));
+        return nullptr;
+    }
+
+    Writter::info(QString("Persistent video socket connected: %1, port %2")
+                  .arg(camId)
+                  .arg(port));
+
+    const QString requestId = pendingRequestIds.value(camId);
+    if (!requestId.isEmpty())
+    {
+        QJsonObject resume;
+        resume["requestId"] = requestId;
+        sendFramedPacket(
+            socket,
+            VssProtocol::PacketType::Resume,
+            QJsonDocument(resume).toJson(QJsonDocument::Compact));
+    }
+
+    return socket;
+}
+
+void WorkManager::readServerResult(const QString& camId)
+{
+    QTcpSocket* socket = videoSockets.value(camId, nullptr);
+    if (!socket)
         return;
 
-    metaSocket->flush();
-    metaSocket->disconnectFromHost();
+    QByteArray& buffer = socketBuffers[camId];
+    buffer.append(socket->readAll());
 
-    if(metaSocket->state() != QAbstractSocket::UnconnectedState)
-        metaSocket->waitForDisconnected(timeoutMs);
+    while (true) {
+        if (buffer.size() < VssProtocol::HeaderSize)
+            return;
+
+        const QByteArray header = buffer.left(VssProtocol::HeaderSize);
+        QDataStream stream(header);
+        stream.setByteOrder(QDataStream::BigEndian);
+
+        quint32 magic = 0;
+        quint8 rawType = 0;
+        quint32 payloadSize = 0;
+        stream >> magic >> rawType >> payloadSize;
+
+        if (magic != VssProtocol::Magic ||
+            payloadSize > VssProtocol::MaxPayloadSize) {
+            Writter::error(QString("Invalid packet header from %1")
+                           .arg(camId));
+            buffer.clear();
+            socket->abort();
+            return;
+        }
+
+        const int packetSize = VssProtocol::HeaderSize
+                + static_cast<int>(payloadSize);
+        if (buffer.size() < packetSize)
+            return;
+
+        const QByteArray payload =
+                buffer.mid(VssProtocol::HeaderSize, payloadSize);
+        buffer.remove(0, packetSize);
+
+        const auto packetType =
+                static_cast<VssProtocol::PacketType>(rawType);
+        if (packetType != VssProtocol::PacketType::Result &&
+            packetType != VssProtocol::PacketType::Error) {
+            Writter::warn(QString("Unexpected server packet type %1 (%2)")
+                          .arg(rawType)
+                          .arg(camId));
+            continue;
+        }
+
+        QJsonParseError parseError;
+        const QJsonDocument document =
+                QJsonDocument::fromJson(payload, &parseError);
+
+        if (parseError.error != QJsonParseError::NoError ||
+            !document.isObject()) {
+            Writter::error(QString("Invalid summarize result (%1): %2")
+                           .arg(camId, parseError.errorString()));
+            continue;
+        }
+
+        const QJsonObject result = document.object();
+        const QString requestId = result.value("requestId").toString();
+        const QString pendingId = pendingRequestIds.value(camId);
+
+        if (requestId.isEmpty() || requestId != pendingId) {
+            Writter::warn(
+                QString("Ignore stale/unknown result (%1): received=%2 pending=%3")
+                    .arg(camId, requestId, pendingId));
+            continue;
+        }
+
+        if (!result.value("success").toBool()) {
+            const QString error = result.value("error").toString();
+            Writter::error(QString("Summarize failed (%1): %2")
+                           .arg(camId, error));
+            completeCameraRequest(camId, requestId, false, error);
+        } else {
+            Writter::info(QString("Summarize result (%1, %2): %3")
+                          .arg(camId,
+                               result.value("fileName").toString(),
+                               result.value("answer").toString()));
+            completeCameraRequest(camId, requestId, true);
+        }
+    }
+}
+
+void WorkManager::onVideoDisconnected(const QString& camId)
+{
+    socketBuffers[camId].clear();
+
+    if (stopping || !pendingRequestIds.contains(camId))
+        return;
+
+    const QString requestId = pendingRequestIds.value(camId);
+    Writter::warn(QString("Video socket disconnected (%1); reconnect scheduled")
+                  .arg(camId));
+
+    QTimer::singleShot(RECONNECT_DELAY_MS, this,
+                       [this, camId, requestId]() {
+        if (stopping || pendingRequestIds.value(camId) != requestId)
+            return;
+
+        auto worker = camWorkers.value(camId);
+        if (!worker || !ensureVideoSocket(worker.get())) {
+            Writter::warn(QString("Video reconnect failed (%1)").arg(camId));
+            return;
+        }
+
+        Writter::info(QString("Video socket reconnected (%1)").arg(camId));
+    });
+}
+
+void WorkManager::onResultTimeout(const QString& camId)
+{
+    if (stopping || !pendingRequestIds.contains(camId))
+        return;
+
+    const QString requestId = pendingRequestIds.value(camId);
+    const int attempt = timeoutCounts.value(camId) + 1;
+    timeoutCounts[camId] = attempt;
+
+    if (attempt > MAX_TIMEOUT_RETRIES) {
+        completeCameraRequest(
+            camId,
+            requestId,
+            false,
+            QString("Summarize response timeout after %1 retries")
+                .arg(MAX_TIMEOUT_RETRIES));
+        return;
+    }
+
+    Writter::warn(QString("Summarize timeout (%1), reconnect retry %2/%3")
+                  .arg(camId)
+                  .arg(attempt)
+                  .arg(MAX_TIMEOUT_RETRIES));
+
+    QTcpSocket* socket = videoSockets.value(camId, nullptr);
+    if (socket && socket->state() != QAbstractSocket::UnconnectedState)
+        socket->abort();
+
+    auto worker = camWorkers.value(camId);
+    if (worker)
+        ensureVideoSocket(worker.get());
+
+    QTimer* timer = resultTimers.value(camId, nullptr);
+    if (timer)
+        timer->start(RETRY_WAIT_MS);
+}
+
+void WorkManager::completeCameraRequest(const QString& camId,
+                                        const QString& requestId,
+                                        bool success,
+                                        const QString& reason)
+{
+    if (pendingRequestIds.value(camId) != requestId)
+        return;
+
+    QTimer* timer = resultTimers.value(camId, nullptr);
+    if (timer)
+        timer->stop();
+
+    pendingRequestIds.remove(camId);
+    timeoutCounts.remove(camId);
+    receivedCams.insert(camId);
+    receivedN = receivedCams.size();
+
+    if (!success) {
+        Writter::error(QString("Camera request completed as failure (%1, %2): %3")
+                       .arg(camId, requestId, reason));
+    }
+
+    if (receivedN >= camN)
+        scheduleNextBatch();
+}
+
+void WorkManager::scheduleNextBatch()
+{
+    if (stopping || nextBatchScheduled)
+        return;
+
+    nextBatchScheduled = true;
+    receivedCams.clear();
+    receivedN = 0;
+
+    // readyRead 또는 전송 실패 처리 중 start()가 중첩 호출되지 않도록
+    // 현재 이벤트가 끝난 뒤 다음 묶음을 시작한다.
+    QTimer::singleShot(0, this, [this]() {
+        nextBatchScheduled = false;
+        if (!stopping)
+            start();
+    });
+}
+
+void WorkManager::closeVideoSockets(int timeoutMs)
+{
+    for (QTcpSocket* socket : videoSockets) {
+        if (!socket ||
+            socket->state() == QAbstractSocket::UnconnectedState)
+            continue;
+
+        socket->flush();
+        socket->disconnectFromHost();
+
+        if (timeoutMs >= 0 &&
+            socket->state() != QAbstractSocket::UnconnectedState)
+            socket->waitForDisconnected(timeoutMs);
+    }
 }
 
 void WorkManager::closeVssSocket(int timeoutMs)
 {
-    if(!metaSocket || metaSocket->state() == QAbstractSocket::UnconnectedState)
+    if(!vssSocket || vssSocket->state() == QAbstractSocket::UnconnectedState)
         return;
 
-    metaSocket->flush();
-    metaSocket->disconnectFromHost();
+    vssSocket->flush();
+    vssSocket->disconnectFromHost();
 
-    if(metaSocket->state() != QAbstractSocket::UnconnectedState)
-        metaSocket->waitForDisconnected(timeoutMs);
+    if(timeoutMs >= 0 &&
+       vssSocket->state() != QAbstractSocket::UnconnectedState)
+        vssSocket->waitForDisconnected(timeoutMs);
 }
 
 void WorkManager::getVssInfos(const QByteArray& data)
@@ -632,23 +948,9 @@ void WorkManager::getVssInfos(const QByteArray& data)
     QJsonObject obj = doc.object();
 
     QString sensorName = obj["sensorName"].toString();
+    QString camId = obj["camId"].toString();
     bool isSave = obj["isSave"].toBool();
 
-
-    if(isSave)
-    {
-        if(saveQueue.isEmpty())
-        {
-            saveQueue.enqueue(sensorName);
-        }
-        else
-        {
-            if(saveQueue.back() != sensorName)
-            {
-
-            }
-        }
-    }
 }
 
 void WorkManager::onProcessSensor(const QString& preDir)

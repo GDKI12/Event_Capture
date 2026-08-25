@@ -26,16 +26,15 @@ public:
     QString getCamId();
     int rawFileSize();
     QVector<QString> getRawFiles(int, int);
-
+    void processClip(bool);
 
 private:
     QString camId;
     QString dstIp;
     int dstPort;
-    int metaPort;
 
     QQueue<QString> rawFiles;
-
+    QVector<QString> trashList;
 };
 
 #endif // CAMWORKER_H
