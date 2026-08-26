@@ -12,16 +12,27 @@ class APIController : public QObject
 {
     Q_OBJECT
 public:
-    APIController(QString requestURL, int interval, QObject* parent = nullptr);
+    APIController(const QString& baseURL, const QString& id
+                  , const QString& pwd, QObject* parent = nullptr);
 
 public slots:
     void pullingMission();
+    void heartbeat();
+    void processStatus(const QString& id, double rate);
+    void finishMission(const QString& id);
     void onAPIFinished(QNetworkReply *reply);
-    void sendHeartbeat(QString requestURL);
+signals:
+    void getMission(const Mission& mission);
 private:
-    QTimer *timer;
+    bool start;
     QNetworkAccessManager *networkManager;
 
+    QString baseURL;
     QString missionRequestURL;
+    QString heartbeatURL;
+    QString collectedURL;
+
+    QString authId;
+    QString secretKey;
 };
 #endif // APICONTROLLER_H

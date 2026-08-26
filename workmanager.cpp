@@ -5,11 +5,26 @@
 
 WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(parent)
 {
+    hasMission = false;
+
     vssSocket = new QTcpSocket(this);
 
     ffmpeg = new QProcess(this);
+    healthyTimer = new QTimer(this);
+    missionTimer = new QTimer(this);
 
+    healthyTimer->start();
+    missionTimer->start();
+
+    // 2 minute
+    healthyTimer->setInterval(120000);
+    healthyTimer->setTimerType(Qt::PreciseTimer);
+
+    missionTimer->setInterval(60000);
+    missionTimer->setTimerType(Qt::PreciseTimer);
     config.loadConfig();
+
+    apiController = new APIController(config.baseURL, config.authId, config.secretKey);
 
     // Get config setting params
     rootPath = config.rootPath;
@@ -19,8 +34,6 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
     dstPort = config.port;
     initPort = 4303;
     timeInterval = config.timeInterval;
-
-    videoLength = config.videoLength;
 
     mode = config.mode;
     width = config.width;
@@ -61,9 +74,21 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
                 this, [this, name]() { onVideoDisconnected(name); });
         idx++;
     }
-    connect(this, &WorkManager::requestToSave, this, &WorkManager::saveSensorData);
-    connect(this, &WorkManager::requestToProcessSensor, this, &WorkManager::onProcessSensor);
+    // 2분에 한번씩 hearbeat 호출
+    connect(healthyTimer, &QTimer::timeout, apiController, &APIController::heartbeat);
+
+    // 1분에 한번씩 mission 풀링
+    connect(missionTimer, &QTimer::timeout, [&](){
+        hasMission = true;
+        apiController->pullingMission();
+        missionTimer->stop();
+    });
+
+    connect(apiController, &APIController::getMission, this, &WorkManager::init);
     connect(&watcher, &QFileSystemWatcher::directoryChanged, this, &WorkManager::onFileSystemChanged);
+
+    // summarize된 결과로 해당 파일들을 어떠게 할건지 처리
+    connect(this, &WorkManager::requestToProcessSensor, this, &WorkManager::processSensor);
 
     connect(vssSocket, &QTcpSocket::connected, this, [=](){
         Writter::info("Connected to VSS server");
@@ -79,25 +104,6 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
         QJsonObject obj = doc.object();
         qDebug() << "VSS control response:" << obj;
     });
-
-    Mission mission;
-    Condition condition;
-    Scenario scenario;
-    Volume volume;
-    condition.weather.append("clear");
-    condition.time.append("daytime");
-    condition.roadEnv.append("urban_local");
-    scenario.scenario.append("lane_keep");
-    volume.clipLengthSec = 10;
-    volume.targetScenes = 5;
-
-    mission.deviceType = "infra";
-    mission.conditions = condition;
-    mission.bestEffort = scenario;
-    mission.volume = volume;
-
-    init(mission);
-
 }
 
 WorkManager::~WorkManager()
@@ -112,6 +118,10 @@ WorkManager::~WorkManager()
 
 void WorkManager::init(const Mission& mission)
 {
+    missionCnt = 0;
+    this->mission = mission;
+    videoLength = mission.clipLengthSec;
+
     Writter::info("Start to initialize");
 
     QDir dir(rootPath);
@@ -517,13 +527,13 @@ void WorkManager::sendToServer(int channel, const Mission& mission, int fps)
 
     dataStream << channel;
     dataStream << fps;
-    dataStream << mission.volume.clipLengthSec;
-    dataStream << mission.volume.targetScenes;
+    dataStream << mission.clipLengthSec;
+    dataStream << mission.targetScenes;
     dataStream << mission.deviceType;
-    dataStream << mission.conditions.weather;
-    dataStream << mission.conditions.time;
-    dataStream << mission.conditions.roadEnv;
-    dataStream << mission.bestEffort.scenario;
+    dataStream << mission.weather;
+    dataStream << mission.time;
+    dataStream << mission.roadEnv;
+    dataStream << mission.scenario;
 
     if(vssSocket->state() == QAbstractSocket::UnconnectedState)
     {
@@ -774,6 +784,7 @@ void WorkManager::readServerResult(const QString& camId)
         }
 
         const QJsonObject result = document.object();
+        QString answer = result["answer"].toString();
         const QString requestId = result.value("requestId").toString();
         const QString pendingId = pendingRequestIds.value(camId);
 
@@ -795,6 +806,24 @@ void WorkManager::readServerResult(const QString& camId)
                                result.value("fileName").toString(),
                                result.value("answer").toString()));
             completeCameraRequest(camId, requestId, true);
+
+            // TODO
+            QStringList vssInfo = answer.split("\n");
+            bool isSave = decideToSave(vssInfo);
+
+
+            emit requestToProcessSensor(camId, mission.saveFolders.head(), isSave);
+
+            if(isSave)
+            {
+                missionCnt++;
+                mission.saveFolders.dequeue();
+            }
+            if(missionCnt == mission.targetScenes)
+            {
+                missionFinish(mission.id);
+            }
+            qDebug() << "";
         }
     }
 }
@@ -935,84 +964,96 @@ void WorkManager::closeVssSocket(int timeoutMs)
         vssSocket->waitForDisconnected(timeoutMs);
 }
 
-void WorkManager::getVssInfos(const QByteArray& data)
+
+bool WorkManager::decideToSave(QStringList answers)
 {
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+    bool isSave = false;
+    QString weatherInfo;
+    QString timeInfo;
+    QString roadInfo;
+    QString eventInfo;
 
-    if (err.error != QJsonParseError::NoError) {
-        qDebug() << "Parse Error:" << err.errorString();
-        return;
+    bool isWeather = false;
+    bool isTime = false;
+    bool isRoad = false;
+    bool isEvent = false;
+
+    for(const QString& s : answers)
+    {
+        QStringList row = s.split(':');
+        if(row[0].trimmed() == "Weather")
+            weatherInfo = row[1].trimmed();
+        else if(row[0].trimmed() == "Time")
+            timeInfo = row[1].trimmed();
+        else if(row[0].trimmed() == "Road")
+            roadInfo = row[1].trimmed();
+        else if(row[0].trimmed() == "Event")
+            eventInfo = row[1].trimmed();
     }
 
-    QJsonObject obj = doc.object();
-
-    QString sensorName = obj["sensorName"].toString();
-    QString camId = obj["camId"].toString();
-    bool isSave = obj["isSave"].toBool();
-
-}
-
-void WorkManager::onProcessSensor(const QString& preDir)
-{
-    if(!vssInfos.contains(preDir))
+    for(const QString& s : std::as_const(mission.weather))
     {
-        Writter::warn(QString("There is no crrespond path, %1").arg(preDir));
-        return;
-    }
-
-    Writter::info(QString("Process Sensor: %1").arg(preDir));
-    bool eventHappened = false;
-
-    VssInfo vInfo = vssInfos[preDir];
-    QVector<quint8> isEventedList = vInfo.isEvent;
-
-    for(int i = 0; i < isEventedList.size(); i++)
-    {
-        bool eventValue = false;
-
-        if(isEventedList[i] == 0x00)
-            eventValue = false;
-        else if(isEventedList[i] == 0x01)
-            eventValue = true;
-        else{
-            // TODO
-        }
-
-        eventHappened = eventHappened || eventValue;
-    }
-
-    if(!eventHappened)
-    {
-        // TODO
-        QDir removeDir(preDir);
-        if(removeDir.exists())
+        if(weatherInfo.contains(s, Qt::CaseInsensitive) || s == "any")
         {
-            if(removeDir.removeRecursively())
-            {
-                Writter::info(QString("Success to remove folder : %1").arg(preDir));
-            }
-            else
-            {
-                Writter::warn(QString("Failed to remove folder : %1").arg(preDir));
-            }
+            isWeather = true;
+            break;
         }
     }
+
+    for(const QString& s : std::as_const(mission.time))
+    {
+        if(timeInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+        {
+            isTime = true;
+            break;
+        }
+    }
+
+    for(const QString& s : std::as_const(mission.roadEnv))
+    {
+        if(roadInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+        {
+            isRoad = true;
+            break;
+        }
+    }
+
+    for(const QString& s : std::as_const(mission.scenario))
+    {
+        if(eventInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+        {
+            isEvent = true;
+            break;
+        }
+    }
+
+    isSave = isWeather && isTime && isRoad && isEvent;
+
+    return isSave;
 }
 
-// 다 처리된 SensorData저장하기
-void WorkManager::saveSensorData(const QString &sensorName)
+void WorkManager::processSensor(const QString& camId, const QString& rootPath, bool isSave)
 {
-    QString srcPath = rootPath + "/" + sensorName;
-    QString dstPath = savePath + "/" + sensorName;
+    QString path = savePath + "/" + rootPath;
+    Writter::info(QString("Request process file to %1").arg(path));
+    camWorkers[camId]->processClip(isSave, path);
+}
 
-    Writter::info(QString("src path: %1, dst path: %2").arg(srcPath, dstPath));
+void WorkManager::missionFinish(const QString& id)
+{
+    stop();
+    missionTimer->start();
 
-    QDir dir;
+    apiController->finishMission(id);
 
-    if(dir.rename(srcPath, dstPath))
-        Writter::info(QString("Success to move from %1 to %2").arg(srcPath, dstPath));
-    else
-        Writter::error(QString("Fail to move from %1 to %2").arg(srcPath, dstPath));
+    mission.id.clear();
+    mission.deviceType.clear();
+    mission.weather.clear();
+    mission.time.clear();
+    mission.roadEnv.clear();
+    mission.scenario.clear();
+    mission.clipLengthSec = 0;
+    mission.targetScenes = 0;
 
+    missionCnt = 0;
 }

@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QDateTime>
 #include <QDebug>
+#include <QQueue>
 
 enum class LogLevel{
     INFO, WARN, ERROR
@@ -31,26 +32,16 @@ struct VssInfo
     QVector<quint8> eventType;
 };
 
-struct Condition{
+struct Mission{
+    QString id;
+    QString deviceType;
     QList<QString> weather;
     QList<QString> time;
     QList<QString> roadEnv;
-};
-
-struct Scenario{
     QList<QString> scenario;
-};
-
-struct Volume{
+    QQueue<QString> saveFolders;
     int clipLengthSec;
     int targetScenes;
-};
-
-struct Mission{
-    QString deviceType;
-    Condition conditions;
-    Scenario bestEffort;
-    Volume volume;
 };
 
 struct RawFileInfo{

@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 #include "camworker.h"
+#include "apicontroller.h"
 #include "config.h"
 #include "define.h"
 #include "vssProtocol.h"
@@ -45,12 +46,11 @@ private:
     void scheduleNextBatch();
     void closeVideoSockets(int timeoutMs = 3000);
     void closeVssSocket(int timeoutMs = 3000);
-    void getVssInfos(const QByteArray&);
-    void onProcessSensor(const QString&);
-    void saveSensorData(const QString&);
+    bool decideToSave(QStringList answers);
+    void processSensor(const QString& camId, const QString& rootPath , bool);
+    void missionFinish(const QString&);
 signals:
-    void requestToProcessSensor(const QString&);
-    void requestToSave(const QString&);
+    void requestToProcessSensor(const QString& camId, const QString& rootPath, bool);
 
 public slots:
     void init(const Mission& mission);
@@ -59,6 +59,7 @@ public slots:
 
 
 private:
+    APIController* apiController;
     QFileSystemWatcher watcher;
     QHash<QString, std::shared_ptr<CamWorker>> camWorkers;
 
@@ -72,7 +73,8 @@ private:
     QMap<QString, VssInfo> vssInfos;
 
     Mission mission;
-
+    QTimer* healthyTimer;
+    QTimer* missionTimer;
 
     QHash<QString, QTcpSocket*> videoSockets;
     QHash<QString, QByteArray> socketBuffers;
@@ -105,6 +107,7 @@ private:
     QQueue<QString> saveQueue;
 
     int receivedN;
+    bool hasMission;
     bool stopping = false;
     bool nextBatchScheduled = false;
 
@@ -112,6 +115,9 @@ private:
     static constexpr int RETRY_WAIT_MS = 30000;
     static constexpr int MAX_TIMEOUT_RETRIES = 3;
     static constexpr int RECONNECT_DELAY_MS = 1000;
+
+    // 미션개수
+    int missionCnt;
 };
 
 #endif // WORKMANAGER_H

@@ -73,9 +73,26 @@ int CamWorker::getPort() {return dstPort;}
 
 QString CamWorker::getCamId(){return camId;}
 
-void CamWorker::processClip(bool isSave)
+void CamWorker::processClip(bool isSave, QString rootPath)
 {
-    if(!isSave)
+    QDir().mkpath(rootPath);
+
+    if(isSave)
+    {
+        for(const QString& filePath : std::as_const(trashList))
+        {
+            QString filename = filePath.split('/').last();
+            QString dstPath = rootPath + "/" + filename;
+
+            if(QFile::exists(filePath))
+            {
+                if(!QFile::rename(filePath, dstPath))
+                    Writter::error(QString("Fail to move %1 to %2").arg(filePath, dstPath));
+            }
+
+            Writter::info("Success to save file");
+        }
+    }else
     {
         for(const QString& filePath : std::as_const(trashList))
         {
@@ -86,6 +103,7 @@ void CamWorker::processClip(bool isSave)
         }
 
         Writter::info("Success to remove file");
+
     }
 
     trashList.clear();
