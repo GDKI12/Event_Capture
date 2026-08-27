@@ -86,19 +86,19 @@ void CamWorker::processClip(bool isSave, QString rootPath)
 
             if(QFile::exists(filePath))
             {
-                if(!QFile::rename(filePath, dstPath))
+//                if(!QFile::rename(filePath, dstPath))
+                if(!QFile::copy(filePath, dstPath))
                     Writter::error(QString("Fail to move %1 to %2").arg(filePath, dstPath));
             }
-
-            Writter::info("Success to save file");
         }
+        Writter::info("Success to save file");
     }else
     {
         for(const QString& filePath : std::as_const(trashList))
         {
             if(QFile::exists(filePath))
             {
-                QFile::remove(filePath);
+//                QFile::remove(filePath);
             }
         }
 

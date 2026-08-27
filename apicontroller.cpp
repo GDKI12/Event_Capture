@@ -93,29 +93,43 @@ void APIController::finishMission(const QString& id)
     QString urlPath = baseURL + "/api/devices/missions/" + id + "/collected";
     QUrl url(urlPath);
 
-    QJsonObject obj;
-    obj["eventId"] = "test_event";
-    obj["message"] = "complete";
 
-    QByteArray body = QJsonDocument(obj).toJson(QJsonDocument::Compact);
     QNetworkRequest request(url);
 
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("X-Device-Id", authId.toUtf8());
     request.setRawHeader("X-Device-Auth-Key", secretKey.toUtf8());
 
-    QNetworkReply* reply = networkManager->post(request, body);
+    QNetworkReply* reply = networkManager->post(request, QByteArray());
     reply->setProperty("apiType", "collected");
 }
 
 void APIController::onAPIFinished(QNetworkReply *reply)
 {
     const QString apiType = reply->property("apiType").toString();
+    const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+    if(reply->error() != QNetworkReply::NoError)
+    {
+        const QByteArray responseBody = reply->readAll();
+        Writter::warn(QString("API failed: type=%1, status=%2, error=%3, body=%4")
+                      .arg(apiType)
+                      .arg(statusCode)
+                      .arg(reply->errorString())
+                      .arg(QString::fromUtf8(responseBody))
+                      );
+
+        reply->deleteLater();
+        return;
+    }
+
 
     if(reply->error() == QNetworkReply::NoError)
     {
         if(apiType == "mission")
         {
+            emit stopPullingMission();
+
             Mission mission;
 
             QByteArray response = reply->readAll();
@@ -147,14 +161,17 @@ void APIController::onAPIFinished(QNetworkReply *reply)
 
             QJsonObject storageTargetObj = missionObj["storageTarget"].toObject();
             QJsonArray scenes = storageTargetObj["scenes"].toArray();
-
+            QString parentDir = storageTargetObj["batchPath"].toString();
             mission.id = missionObj["dispatchId"].toString();
             mission.deviceType = missionObj["deviceType"].toString();
             mission.clipLengthSec = volume["clipLengthSec"].toInt();
             mission.targetScenes = volume["targetSceneCount"].toInt();
 
             for(const QJsonValue& value : scenes)
-                mission.saveFolders.enqueue(value["relativePath"].toString());
+            {
+                QString path = parentDir + "/" + value["relativePath"].toString();
+                mission.saveFolders.enqueue(path);
+            }
 
             for(const QJsonValue& value : weatherArr)
                 mission.weather.append(value.toString());
@@ -188,10 +205,6 @@ void APIController::onAPIFinished(QNetworkReply *reply)
         {
             Writter::info("Finish mission successfully");
         }
-    }else
-    {
-        QString errorLog = reply->errorString();
-        Writter::warn("Fail to call mission pulling api: " + reply->errorString());
     }
 
     reply->deleteLater();

@@ -23,6 +23,7 @@ public slots:
     void onAPIFinished(QNetworkReply *reply);
 signals:
     void getMission(const Mission& mission);
+    void stopPullingMission();
 private:
     bool start;
     QNetworkAccessManager *networkManager;

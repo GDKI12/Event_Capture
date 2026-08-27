@@ -28,6 +28,4 @@ void VssLogger::addLog()
     QByteArray data = file.readAll();
     file.close();
 
-
-
 }

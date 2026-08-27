@@ -2,19 +2,15 @@
 
 #include <QDataStream>
 #include <QElapsedTimer>
+#include <QCoreApplication>
 
 WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(parent)
 {
-    hasMission = false;
-
-    vssSocket = new QTcpSocket(this);
-
+    manager = new QNetworkAccessManager(this);
     ffmpeg = new QProcess(this);
     healthyTimer = new QTimer(this);
     missionTimer = new QTimer(this);
 
-    healthyTimer->start();
-    missionTimer->start();
 
     // 2 minute
     healthyTimer->setInterval(120000);
@@ -22,6 +18,9 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
 
     missionTimer->setInterval(60000);
     missionTimer->setTimerType(Qt::PreciseTimer);
+
+    healthyTimer->start();
+    missionTimer->start();
     config.loadConfig();
 
     apiController = new APIController(config.baseURL, config.authId, config.secretKey);
@@ -79,8 +78,11 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
 
     // 1분에 한번씩 mission 풀링
     connect(missionTimer, &QTimer::timeout, [&](){
-        hasMission = true;
         apiController->pullingMission();
+    });
+
+    // 풀릴 완료시 타이머 stop
+    connect(apiController, &APIController::stopPullingMission, this,[this](){
         missionTimer->stop();
     });
 
@@ -90,20 +92,34 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
     // summarize된 결과로 해당 파일들을 어떠게 할건지 처리
     connect(this, &WorkManager::requestToProcessSensor, this, &WorkManager::processSensor);
 
-    connect(vssSocket, &QTcpSocket::connected, this, [=](){
-        Writter::info("Connected to VSS server");
+    QUrl url(config.vssHealthyURL);
+
+    QNetworkRequest request(url);
+    QNetworkReply* reply = manager->get(request);
+
+    connect(reply, &QNetworkReply::finished, [reply](){
+        if(reply->error() == QNetworkReply::NoError)
+        {
+            QByteArray data = reply->readAll();
+            QJsonDocument doc = QJsonDocument::fromJson(data);
+            QJsonObject obj = doc.object();
+            bool vssAgentStatus = obj["success"].toBool();
+
+            reply->deleteLater();
+
+            if(!vssAgentStatus)
+            {
+                Writter::error("Not alive vss agent");
+                QCoreApplication::exit(EXIT_FAILURE);
+                return;
+            }
+        }else{
+            qDebug() << "VSS agent heathy api error: " << reply->errorString();
+        }
+
+        reply->deleteLater();
     });
 
-    connect(vssSocket, static_cast<void(QTcpSocket::*)(QAbstractSocket::SocketError)>(&QTcpSocket::error), this,
-            [=](QAbstractSocket::SocketError){
-        Writter::error(QString("VSS socket error: %1").arg(vssSocket->errorString()));
-    });
-    connect(vssSocket, &QTcpSocket::readyRead, this, [=](){
-        QByteArray data = vssSocket->readAll();
-        QJsonDocument doc = QJsonDocument::fromJson(data);
-        QJsonObject obj = doc.object();
-        qDebug() << "VSS control response:" << obj;
-    });
 }
 
 WorkManager::~WorkManager()
@@ -120,7 +136,7 @@ void WorkManager::init(const Mission& mission)
 {
     missionCnt = 0;
     this->mission = mission;
-    videoLength = mission.clipLengthSec;
+    videoLength = mission.clipLengthSec * 10;
 
     Writter::info("Start to initialize");
 
@@ -142,8 +158,6 @@ void WorkManager::init(const Mission& mission)
     QStringList camList = firstSensorDir.entryList({"cam?"}, QDir::Dirs | QDir::NoDotAndDotDot);
 
     camN = camList.size();
-
-    sendToServer(camList.size(), mission);
 
     Writter::info(QString("Load sensor folder from %1").arg(rootPath));
     Writter::info(QString("Initial sensor folder list : %1").arg(QStringList(sensorDirs.begin(), sensorDirs.end()).join(",")));
@@ -242,10 +256,6 @@ void WorkManager::onFileSystemChanged(const QString& path)
 
 void WorkManager::start()
 {
-    if(vssSocket && vssSocket->state() != QAbstractSocket::ConnectedState)
-        vssSocket->connectToHost(dstIp, initPort);
-
-
     bool isChange = true;
 
     QVector<bool> camValid;
@@ -313,15 +323,13 @@ void WorkManager::stop()
 
     closeVideoSockets(-1);
 
-    closeVssSocket(-1);
-    vssSocket->deleteLater();
-
     stopFfmpeg();
     ffmpeg->deleteLater();
 
     const QStringList paths = watcher.directories();
     if(!paths.isEmpty())
         watcher.removePaths(watcher.directories());
+
 }
 
 
@@ -518,64 +526,7 @@ void WorkManager::sendClip(const QVector<QString> &clips, CamWorker* camWorker)
     return;
 }
 
-void WorkManager::sendToServer(int channel, const Mission& mission, int fps)
-{
-    QByteArray initData;
 
-    QDataStream dataStream(&initData, QIODevice::WriteOnly);
-    dataStream.setByteOrder(QDataStream::BigEndian);
-
-    dataStream << channel;
-    dataStream << fps;
-    dataStream << mission.clipLengthSec;
-    dataStream << mission.targetScenes;
-    dataStream << mission.deviceType;
-    dataStream << mission.weather;
-    dataStream << mission.time;
-    dataStream << mission.roadEnv;
-    dataStream << mission.scenario;
-
-    if(vssSocket->state() == QAbstractSocket::UnconnectedState)
-    {
-        vssSocket->connectToHost(dstIp, initPort);
-
-        if(!vssSocket->waitForConnected(3000))
-        {
-            Writter::error(QString("Write timeout: %1").arg(vssSocket->errorString()));
-            // TODO
-            // STOP logic
-        }
-    }
-    QByteArray packet;
-    QDataStream stream(&packet, QIODevice::WriteOnly);
-    stream.setByteOrder(QDataStream::BigEndian);
-
-    stream << static_cast<quint32>(initData.size());
-    packet.append(initData);
-
-    qint64 writeBytes = vssSocket->write(packet);
-
-    if (writeBytes == -1)
-    {
-        Writter::error("Fail to send to server");
-        return;
-
-        // STOP logic
-        stop();
-    }
-
-    if(!vssSocket->waitForBytesWritten(3000))
-    {
-        Writter::error("Time out send to server");
-
-        // STOP logic
-        stop();
-    }
-
-    Writter::info("Success to send init config params");
-
-
-}
 bool WorkManager::ensureFfmpegRunning()
 {
     if(ffmpeg->state() == QProcess::Running)
@@ -951,18 +902,6 @@ void WorkManager::closeVideoSockets(int timeoutMs)
     }
 }
 
-void WorkManager::closeVssSocket(int timeoutMs)
-{
-    if(!vssSocket || vssSocket->state() == QAbstractSocket::UnconnectedState)
-        return;
-
-    vssSocket->flush();
-    vssSocket->disconnectFromHost();
-
-    if(timeoutMs >= 0 &&
-       vssSocket->state() != QAbstractSocket::UnconnectedState)
-        vssSocket->waitForDisconnected(timeoutMs);
-}
 
 
 bool WorkManager::decideToSave(QStringList answers)
@@ -988,53 +927,102 @@ bool WorkManager::decideToSave(QStringList answers)
         else if(row[0].trimmed() == "Road")
             roadInfo = row[1].trimmed();
         else if(row[0].trimmed() == "Event")
-            eventInfo = row[1].trimmed();
-    }
-
-    for(const QString& s : std::as_const(mission.weather))
-    {
-        if(weatherInfo.contains(s, Qt::CaseInsensitive) || s == "any")
         {
-            isWeather = true;
-            break;
+            if(eventInfo.isEmpty())
+                eventInfo = row[1].trimmed();
+            else
+                eventInfo.append(QString(" %1").arg(row[1].trimmed()));
+        }
+        else if(row[0].trimmed() == "Road Features")
+        {
+            if(eventInfo.isEmpty())
+                eventInfo = row[1].trimmed();
+            else
+                eventInfo.append(QString(" %1").arg(row[1].trimmed()));
         }
     }
 
-    for(const QString& s : std::as_const(mission.time))
+    if(mission.weather.isEmpty())
     {
-        if(timeInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+        isWeather = true;
+    }else{
+
+        for(const QString& s : std::as_const(mission.weather))
         {
-            isTime = true;
-            break;
+            if(weatherInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+            {
+                isWeather = true;
+                break;
+            }
         }
     }
 
-    for(const QString& s : std::as_const(mission.roadEnv))
+    if(mission.time.isEmpty())
     {
-        if(roadInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+        isTime = true;
+    }else{
+
+        for(const QString& s : std::as_const(mission.time))
         {
-            isRoad = true;
-            break;
+            if(timeInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+            {
+                isTime = true;
+                break;
+            }
         }
     }
 
-    for(const QString& s : std::as_const(mission.scenario))
+    if(mission.roadEnv.isEmpty())
     {
-        if(eventInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+        isRoad = true;
+    }else{
+
+        for(const QString& s : std::as_const(mission.roadEnv))
         {
-            isEvent = true;
-            break;
+            if(roadInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+            {
+                isRoad = true;
+                break;
+            }
+        }
+    }
+
+    if(mission.scenario.isEmpty())
+    {
+        isEvent = true;
+    }else{
+
+        for(const QString& s : std::as_const(mission.scenario))
+        {
+            if(eventInfo.contains(s, Qt::CaseInsensitive) || s == "any")
+            {
+                isEvent = true;
+                break;
+            }
         }
     }
 
     isSave = isWeather && isTime && isRoad && isEvent;
 
+    qDebug() << "[mission]";
+    qDebug() << "weather: " << mission.weather;
+    qDebug() << "time: " << mission.time;
+    qDebug() << "road: " << mission.roadEnv;
+    qDebug() << "event: " << mission.scenario;
+
+    Writter::info(QString("weather: %1").arg(weatherInfo));
+    Writter::info(QString("time: %1").arg(timeInfo));
+    Writter::info(QString("road: %1").arg(roadInfo));
+    Writter::info(QString("event: %1").arg(eventInfo));
+
+    Writter::info(QString("weather: %1, time: %2, road: %3, evnet: %4")
+                  .arg(isWeather).arg(isTime).arg(isRoad).arg(isEvent));
     return isSave;
 }
 
 void WorkManager::processSensor(const QString& camId, const QString& rootPath, bool isSave)
 {
-    QString path = savePath + "/" + rootPath;
+    QString path = savePath + rootPath;
     Writter::info(QString("Request process file to %1").arg(path));
     camWorkers[camId]->processClip(isSave, path);
 }
@@ -1042,8 +1030,8 @@ void WorkManager::processSensor(const QString& camId, const QString& rootPath, b
 void WorkManager::missionFinish(const QString& id)
 {
     stop();
+    qDebug() << "mission pulling timer test: timer is started";
     missionTimer->start();
-
     apiController->finishMission(id);
 
     mission.id.clear();

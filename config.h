@@ -37,6 +37,7 @@ public:
             std::string cRootPath;
             std::string cSavePath;
             std::string cDstIp;
+            std::string cVssHealthyURL;
             std::string cBaseUrl;
             std::string cAuthId;
             std::string cSecretKey;
@@ -45,10 +46,12 @@ public:
             cSavePath = toml::find<std::string>(data, "setting", "save_path");
             cDstIp = toml::find<std::string>(data, "setting","dst_ip");
 
+            cVssHealthyURL = toml::find<std::string>(data, "setting", "vss_healthy_url");
             cBaseUrl = toml::find<std::string>(data, "setting", "base_url");
             cAuthId = toml::find<std::string>(data, "setting", "auth_id");
             cSecretKey = toml::find<std::string>(data, "setting", "secret_key");
 
+            vssHealthyURL = QString::fromStdString(cVssHealthyURL);
             baseURL = QString::fromStdString(cBaseUrl);
             authId = QString::fromStdString(cAuthId);
             secretKey = QString::fromStdString(cSecretKey);
@@ -78,6 +81,7 @@ public:
         }
     }
 public:
+    QString vssHealthyURL;
     QString baseURL;
     QString authId;
     QString secretKey;

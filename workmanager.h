@@ -27,7 +27,6 @@ public:
 
 private:
     void sendClip(const QVector<QString>& clips, CamWorker* camWorker);
-    void sendToServer(int channel, const Mission& mission, int fps = 10);
     bool ensureFfmpegRunning();
     bool drainFfmpegOutput(QTcpSocket* socket);
     bool sendFramedPacket(QTcpSocket* socket,
@@ -45,7 +44,6 @@ private:
                                const QString& reason = QString());
     void scheduleNextBatch();
     void closeVideoSockets(int timeoutMs = 3000);
-    void closeVssSocket(int timeoutMs = 3000);
     bool decideToSave(QStringList answers);
     void processSensor(const QString& camId, const QString& rootPath , bool);
     void missionFinish(const QString&);
@@ -59,6 +57,9 @@ public slots:
 
 
 private:
+    // vss api manager
+    QNetworkAccessManager* manager;
+
     APIController* apiController;
     QFileSystemWatcher watcher;
     QHash<QString, std::shared_ptr<CamWorker>> camWorkers;
@@ -82,7 +83,6 @@ private:
     QHash<QString, QString> pendingRequestIds;
     QHash<QString, int> timeoutCounts;
     QHash<QString, QTimer*> resultTimers;
-    QTcpSocket* vssSocket;
 
     QProcess* ffmpeg;
 
@@ -107,7 +107,6 @@ private:
     QQueue<QString> saveQueue;
 
     int receivedN;
-    bool hasMission;
     bool stopping = false;
     bool nextBatchScheduled = false;
 
