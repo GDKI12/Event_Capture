@@ -128,7 +128,6 @@ void APIController::onAPIFinished(QNetworkReply *reply)
     {
         if(apiType == "mission")
         {
-            emit stopPullingMission();
 
             Mission mission;
 
@@ -161,7 +160,7 @@ void APIController::onAPIFinished(QNetworkReply *reply)
 
             QJsonObject storageTargetObj = missionObj["storageTarget"].toObject();
             QJsonArray scenes = storageTargetObj["scenes"].toArray();
-            QString parentDir = storageTargetObj["batchPath"].toString();
+            QString parentDir = storageTargetObj["writePath"].toString();
             mission.id = missionObj["dispatchId"].toString();
             mission.deviceType = missionObj["deviceType"].toString();
             mission.clipLengthSec = volume["clipLengthSec"].toInt();
@@ -186,6 +185,7 @@ void APIController::onAPIFinished(QNetworkReply *reply)
                 mission.scenario.append(value.toString());
 
             Writter::info("Get Mission");
+            emit stopPullingMission();
             emit getMission(mission);
 
 

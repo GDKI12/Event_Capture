@@ -32,7 +32,6 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
 
     dstPort = config.port;
     initPort = 4303;
-    timeInterval = config.timeInterval;
 
     mode = config.mode;
     width = config.width;
@@ -124,19 +123,17 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
 
 WorkManager::~WorkManager()
 {
-    stopping = true;
-    for (QTimer* timer : resultTimers)
-        timer->stop();
-    closeVideoSockets();
-    ffmpeg->deleteLater();
+    stop();
 }
 
 
 void WorkManager::init(const Mission& mission)
 {
+
     missionCnt = 0;
     this->mission = mission;
     videoLength = mission.clipLengthSec * 10;
+    timeInterval = videoLength;
 
     Writter::info("Start to initialize");
 
@@ -173,7 +170,7 @@ void WorkManager::init(const Mission& mission)
     }
 
     Writter::info("Success to initialize, start to send video");
-
+    stopping = false;
     start();
 }
 
@@ -324,7 +321,6 @@ void WorkManager::stop()
     closeVideoSockets(-1);
 
     stopFfmpeg();
-    ffmpeg->deleteLater();
 
     const QStringList paths = watcher.directories();
     if(!paths.isEmpty())
@@ -467,6 +463,7 @@ void WorkManager::sendClip(const QVector<QString> &clips, CamWorker* camWorker)
             }
 
         }
+        // End to send clip
     }
 
     if (ffmpeg->state() != QProcess::Running) {
@@ -1027,10 +1024,24 @@ void WorkManager::processSensor(const QString& camId, const QString& rootPath, b
     camWorkers[camId]->processClip(isSave, path);
 }
 
+void WorkManager::pauseVideoSending()
+{
+    stopping = true;
+    for(QTimer* timer : resultTimers)
+        timer->stop();
+
+    pendingRequestIds.clear();
+    timeoutCounts.clear();
+    receivedCams.clear();
+    receivedN = 0;
+    nextBatchScheduled = false;
+
+    stopFfmpeg();
+}
+
 void WorkManager::missionFinish(const QString& id)
 {
-    stop();
-    qDebug() << "mission pulling timer test: timer is started";
+    qDebug() << "Start to pulling mission";
     missionTimer->start();
     apiController->finishMission(id);
 

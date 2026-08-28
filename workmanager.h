@@ -22,7 +22,6 @@ public:
     ~WorkManager();
     bool isSensorDirReady(const QString&);
 
-    void start();
     void stop();
 
 private:
@@ -34,6 +33,7 @@ private:
                           const QByteArray& payload,
                           int timeoutMs = 30000);
     void stopFfmpeg();
+    void pauseVideoSending();
     QTcpSocket* ensureVideoSocket(CamWorker* camWorker);
     void readServerResult(const QString& camId);
     void onVideoDisconnected(const QString& camId);
@@ -51,6 +51,7 @@ signals:
     void requestToProcessSensor(const QString& camId, const QString& rootPath, bool);
 
 public slots:
+    void start();
     void init(const Mission& mission);
     void onFileSystemChanged(const QString& path);
 
