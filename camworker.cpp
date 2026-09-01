@@ -50,6 +50,10 @@ QVector<QString> CamWorker::getRawFiles(int timeInterval, int videoL)
     return result;
 }
 
+void CamWorker::addRawFile(const QString& rawFile)
+{
+
+}
 
 void CamWorker::addRawFiles(const QString& dirPath)
 {
@@ -73,8 +77,9 @@ int CamWorker::getPort() {return dstPort;}
 
 QString CamWorker::getCamId(){return camId;}
 
-void CamWorker::processClip(bool isSave, QString rootPath)
+QVector<QString> CamWorker::processClip(bool isSave, QString rootPath)
 {
+    QVector<QString> resultList;
     QDir().mkpath(rootPath);
 
     if(isSave)
@@ -86,6 +91,8 @@ void CamWorker::processClip(bool isSave, QString rootPath)
 
             if(QFile::exists(filePath))
             {
+                resultList.append(dstPath);
+
 //                if(!QFile::rename(filePath, dstPath))
                 if(!QFile::copy(filePath, dstPath))
                     Writter::error(QString("Fail to move %1 to %2").arg(filePath, dstPath));
@@ -107,4 +114,6 @@ void CamWorker::processClip(bool isSave, QString rootPath)
     }
 
     trashList.clear();
+
+    return resultList;
 }

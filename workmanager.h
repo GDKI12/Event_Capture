@@ -13,6 +13,7 @@
 #include "config.h"
 #include "define.h"
 #include "vssProtocol.h"
+#include "vsslogger.h"
 
 class WorkManager : public QObject
 {
@@ -45,13 +46,14 @@ private:
     void scheduleNextBatch();
     void closeVideoSockets(int timeoutMs = 3000);
     bool decideToSave(QStringList answers);
-    void processSensor(const QString& camId, const QString& rootPath , bool);
+    void processSensor(const QString& camId, const QString& rootPath , QStringList text);
     void missionFinish(const QString&);
 signals:
-    void requestToProcessSensor(const QString& camId, const QString& rootPath, bool);
+    void requestToProcessSensor(const QString& camId, const QString& rootPath, QStringList text);
 
 public slots:
-    void start();
+    void startFileMode();
+    void startLiveMode();
     void init(const Mission& mission);
     void onFileSystemChanged(const QString& path);
 
@@ -62,15 +64,16 @@ private:
     QNetworkAccessManager* manager;
 
     APIController* apiController;
+    VssLogger* logger;
     QFileSystemWatcher watcher;
     QHash<QString, std::shared_ptr<CamWorker>> camWorkers;
 
     Config config;
 
+    QString currDir;
+    QString workingDir;
     QQueue<QString> sensorDirs;
     QSet<QString> queuedSensors;
-
-    QSet<QString> preSensors;
 
     QMap<QString, VssInfo> vssInfos;
 
@@ -87,7 +90,6 @@ private:
 
     QProcess* ffmpeg;
 
-    QString currDir;
 
     int camN;
 
@@ -96,7 +98,6 @@ private:
     QString savePath;
     QString dstIp;
     int dstPort;
-    int initPort;
     int timeInterval;
     int videoLength;
     bool mode;
@@ -109,6 +110,7 @@ private:
 
     int receivedN;
     bool stopping = false;
+    bool restart = false;
     bool nextBatchScheduled = false;
 
     static constexpr int RESULT_TIMEOUT_MS = 120000;

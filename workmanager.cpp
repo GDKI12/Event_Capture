@@ -28,10 +28,14 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
     // Get config setting params
     rootPath = config.rootPath;
     savePath = config.savePath;
+
+    // 로그 설정
+    QString logPath = config.logPath;
+    logger = new VssLogger(logPath, this);
+
     dstIp = config.ip;
 
     dstPort = config.port;
-    initPort = 4303;
 
     mode = config.mode;
     width = config.width;
@@ -41,6 +45,8 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
     int idx = 0;
 
     receivedN = 0;
+
+    watcher.addPath(rootPath);
 
     for(QString name : cams)
     {
@@ -129,7 +135,6 @@ WorkManager::~WorkManager()
 
 void WorkManager::init(const Mission& mission)
 {
-
     missionCnt = 0;
     this->mission = mission;
     videoLength = mission.clipLengthSec * 10;
@@ -147,12 +152,24 @@ void WorkManager::init(const Mission& mission)
         return;
     }
 
-    for(const QFileInfo& fi : infos)
-        sensorDirs.enqueue(fi.absoluteFilePath());
+    if(!mode)
+    {
+        if(restart)
+        {
+            for(const QFileInfo& fi : infos)
+                sensorDirs.enqueue(fi.absoluteFilePath());
+
+
+        }
+    }
 
     QString firstSensorDirPath = sensorDirs.first();
     QDir firstSensorDir(firstSensorDirPath);
-    QStringList camList = firstSensorDir.entryList({"cam?"}, QDir::Dirs | QDir::NoDotAndDotDot);
+
+    QString cameraDirPath = firstSensorDirPath + "/camera";
+    QDir cameraDir(cameraDirPath);
+
+    QStringList camList = cameraDir.entryList({"cam?"}, QDir::Dirs | QDir::NoDotAndDotDot);
 
     camN = camList.size();
 
@@ -171,7 +188,7 @@ void WorkManager::init(const Mission& mission)
 
     Writter::info("Success to initialize, start to send video");
     stopping = false;
-    start();
+    startFileMode();
 }
 
 
@@ -207,51 +224,63 @@ void WorkManager::onFileSystemChanged(const QString& path)
         QFileInfoList sensorList = dir.entryInfoList({"Sensor_Data*"}, QDir::Dirs | QDir::NoDotAndDotDot,
                                                      QDir::Name);
 
-        QSet<QString> curSensors;
+        QList<QString> curSensors;
 
         for(const QFileInfo& fi : sensorList)
-            curSensors.insert(fi.absoluteFilePath());
+            curSensors.append(fi.absoluteFilePath());
 
-        QSet<QString> added = curSensors - preSensors;
 
-        for(const QString& f : added)
+        for(const QString& f : std::as_const(curSensors))
         {
-            QString sensorDir = QString("%1/%2").arg(f);
-
-            Writter::info(QString("Added folder : %1").arg(sensorDir));
-            preSensors.insert(f);
-            watcher.addPath(sensorDir);
+            if(!watcher.directories().contains(f))
+                watcher.addPath(f);
         }
 
     }else if(baseName.startsWith("Sensor_Data_"))
     {
-        for(int i = 0; i < camN; i++)
-        {
-            QString camId = QString("cam%1").arg(i+1);
-            QString camPath = QString("%1/%2").arg(path, camId);
+        QList<QString> camDirs;
+        QFileInfoList subDirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
 
-            watcher.addPath(camPath);
+        QString cameraPath;
+        for(const QFileInfo &fi: std::as_const(subDirs))
+        {
+            QString folderName = fi.baseName();
+            if(folderName == "camera")
+                cameraPath = fi.absoluteFilePath();
         }
-    }else if(baseName.startsWith("cam"))
+
+        QDir cameraDir(cameraPath);
+        QFileInfoList camFiList = cameraDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+
+        for(const QFileInfo& fi : std::as_const(camFiList))
+        {
+            if(fi.baseName().startsWith("cam"))
+            {
+                if(!watcher.directories().contains(fi.absoluteFilePath()))
+                    watcher.addPath(fi.absoluteFilePath());
+            }
+        }
+
+    }else if(baseName.startsWith("cam") && baseName.length() == 4)
     {
         dir.cdUp();
+        dir.cdUp();
 
-        QString sensorPath = dir.absolutePath();
 
-        if(isSensorDirReady(dir.absolutePath()))
+        if(dir.absolutePath().startsWith("Sensor_Data_"))
         {
-            if(!queuedSensors.contains(sensorPath))
-            {
-                sensorDirs.enqueue(sensorPath);
-                queuedSensors.insert(sensorPath);
-            }
+            if(!sensorDirs.contains(dir.absolutePath()))
+                sensorDirs.enqueue(dir.absolutePath());
         }
     }
 
 }
 
+void WorkManager::startLiveMode()
+{
 
-void WorkManager::start()
+}
+void WorkManager::startFileMode()
 {
     bool isChange = true;
 
@@ -311,6 +340,7 @@ void WorkManager::start()
 
 
 }
+
 
 void WorkManager::stop()
 {
@@ -757,21 +787,9 @@ void WorkManager::readServerResult(const QString& camId)
 
             // TODO
             QStringList vssInfo = answer.split("\n");
-            bool isSave = decideToSave(vssInfo);
 
+            emit requestToProcessSensor(camId, mission.saveFolders.head(), vssInfo);
 
-            emit requestToProcessSensor(camId, mission.saveFolders.head(), isSave);
-
-            if(isSave)
-            {
-                missionCnt++;
-                mission.saveFolders.dequeue();
-            }
-            if(missionCnt == mission.targetScenes)
-            {
-                missionFinish(mission.id);
-            }
-            qDebug() << "";
         }
     }
 }
@@ -879,7 +897,7 @@ void WorkManager::scheduleNextBatch()
     QTimer::singleShot(0, this, [this]() {
         nextBatchScheduled = false;
         if (!stopping)
-            start();
+            startFileMode();
     });
 }
 
@@ -914,9 +932,11 @@ bool WorkManager::decideToSave(QStringList answers)
     bool isRoad = false;
     bool isEvent = false;
 
+
     for(const QString& s : answers)
     {
         QStringList row = s.split(':');
+
         if(row[0].trimmed() == "Weather")
             weatherInfo = row[1].trimmed();
         else if(row[0].trimmed() == "Time")
@@ -939,11 +959,13 @@ bool WorkManager::decideToSave(QStringList answers)
         }
     }
 
+
+
     if(mission.weather.isEmpty())
     {
         isWeather = true;
-    }else{
-
+    }else
+    {
         for(const QString& s : std::as_const(mission.weather))
         {
             if(weatherInfo.contains(s, Qt::CaseInsensitive) || s == "any")
@@ -957,8 +979,8 @@ bool WorkManager::decideToSave(QStringList answers)
     if(mission.time.isEmpty())
     {
         isTime = true;
-    }else{
-
+    }else
+    {
         for(const QString& s : std::as_const(mission.time))
         {
             if(timeInfo.contains(s, Qt::CaseInsensitive) || s == "any")
@@ -972,8 +994,8 @@ bool WorkManager::decideToSave(QStringList answers)
     if(mission.roadEnv.isEmpty())
     {
         isRoad = true;
-    }else{
-
+    }else
+    {
         for(const QString& s : std::as_const(mission.roadEnv))
         {
             if(roadInfo.contains(s, Qt::CaseInsensitive) || s == "any")
@@ -987,7 +1009,8 @@ bool WorkManager::decideToSave(QStringList answers)
     if(mission.scenario.isEmpty())
     {
         isEvent = true;
-    }else{
+    }else
+    {
 
         for(const QString& s : std::as_const(mission.scenario))
         {
@@ -1017,11 +1040,22 @@ bool WorkManager::decideToSave(QStringList answers)
     return isSave;
 }
 
-void WorkManager::processSensor(const QString& camId, const QString& rootPath, bool isSave)
+void WorkManager::processSensor(const QString& camId, const QString& rootPath, QStringList text)
 {
+    bool isSave = decideToSave(text);
     QString path = savePath + rootPath;
     Writter::info(QString("Request process file to %1").arg(path));
-    camWorkers[camId]->processClip(isSave, path);
+    QVector<QString> processedFiles = camWorkers[camId]->processClip(isSave, path);
+
+    if(isSave)
+    {
+        missionCnt++;
+        mission.saveFolders.dequeue();
+        logger->addLog(processedFiles, text);
+    }
+
+    if(missionCnt == mission.targetScenes)
+        missionFinish(mission.id);
 }
 
 void WorkManager::pauseVideoSending()
@@ -1045,6 +1079,7 @@ void WorkManager::missionFinish(const QString& id)
     missionTimer->start();
     apiController->finishMission(id);
 
+    stopping = true;
     mission.id.clear();
     mission.deviceType.clear();
     mission.weather.clear();

@@ -145,7 +145,7 @@ void APIController::onAPIFinished(QNetworkReply *reply)
 
             if(missions.isEmpty())
             {
-                Writter::info("No mission");
+                Writter::info("Can not find mission");
                 return;
             }
             QJsonObject missionObj = missions[0].toObject();

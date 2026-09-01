@@ -36,6 +36,7 @@ public:
 
             std::string cRootPath;
             std::string cSavePath;
+            std::string cLogPath;
             std::string cDstIp;
             std::string cVssHealthyURL;
             std::string cBaseUrl;
@@ -44,6 +45,7 @@ public:
 
             cRootPath = toml::find<std::string>(data, "setting", "root_path");
             cSavePath = toml::find<std::string>(data, "setting", "save_path");
+            cLogPath = toml::find<std::string>(data,"setting", "log_path");
             cDstIp = toml::find<std::string>(data, "setting","dst_ip");
 
             cVssHealthyURL = toml::find<std::string>(data, "setting", "vss_healthy_url");
@@ -88,6 +90,7 @@ public:
 
     QString rootPath;
     QString savePath;
+    QString logPath;
     QString ip;
     int port;
     int videoLength;

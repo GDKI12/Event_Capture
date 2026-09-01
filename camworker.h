@@ -22,13 +22,14 @@ class CamWorker : public QObject
 public:
     explicit CamWorker(const QString& camId, int port, QObject* parent = nullptr);
     void addRawFiles(const QString&);
+    void addRawFile(const QString&);
     int getPort();
     QString getCamId();
     int rawFileSize();
     QVector<QString> getRawFiles(int, int);
 
 public slots:
-    void processClip(bool isSave, QString rootPath);
+    QVector<QString> processClip(bool isSave, QString rootPath);
 
 private:
     QString camId;
