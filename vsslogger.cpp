@@ -20,6 +20,11 @@ VssLogger::VssLogger(const QString& rootPath, QObject* parent) : QObject(parent)
         Writter::info(QString("Fail to open log file %1").arg(filePath));
     }
 
+    QJsonArray arr;
+    QJsonDocument doc(arr);
+
+    file.write(doc.toJson(QJsonDocument::Indented));
+
     file.close();
 }
 
@@ -40,11 +45,18 @@ void VssLogger::addLog(QVector<QString> processedFiles, QStringList text)
     // summarize 결과를 로그에 넣기위해서 데이터 가공
     for(QString& s : text)
     {
-        QStringList syntex = s.split(':');
-        QString key = syntex[0].trimmed();
-        QString value = syntex[1].trimmed();
+        if(s.isEmpty())
+            continue;
 
-        obj[key] = value;
+        const int separator = s.indexOf(':');
+        if(separator < 0)
+            continue;
+
+        QString key = s.left(separator).trimmed();
+        QString value = s.mid(separator+1).trimmed();
+
+        if(!key.isEmpty())
+            obj[key] = value;
     }
 
 

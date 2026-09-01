@@ -152,24 +152,13 @@ void WorkManager::init(const Mission& mission)
         return;
     }
 
-    if(!mode)
-    {
-        if(restart)
-        {
-            for(const QFileInfo& fi : infos)
-                sensorDirs.enqueue(fi.absoluteFilePath());
-
-
-        }
-    }
+    for(const QFileInfo& fi : infos)
+        sensorDirs.enqueue(fi.absoluteFilePath());
 
     QString firstSensorDirPath = sensorDirs.first();
     QDir firstSensorDir(firstSensorDirPath);
 
-    QString cameraDirPath = firstSensorDirPath + "/camera";
-    QDir cameraDir(cameraDirPath);
-
-    QStringList camList = cameraDir.entryList({"cam?"}, QDir::Dirs | QDir::NoDotAndDotDot);
+    QStringList camList = firstSensorDir.entryList({"cam?"}, QDir::Dirs | QDir::NoDotAndDotDot);
 
     camN = camList.size();
 
@@ -238,21 +227,10 @@ void WorkManager::onFileSystemChanged(const QString& path)
 
     }else if(baseName.startsWith("Sensor_Data_"))
     {
-        QList<QString> camDirs;
-        QFileInfoList subDirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
+        QFileInfoList camDirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
 
-        QString cameraPath;
-        for(const QFileInfo &fi: std::as_const(subDirs))
-        {
-            QString folderName = fi.baseName();
-            if(folderName == "camera")
-                cameraPath = fi.absoluteFilePath();
-        }
 
-        QDir cameraDir(cameraPath);
-        QFileInfoList camFiList = cameraDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
-
-        for(const QFileInfo& fi : std::as_const(camFiList))
+        for(const QFileInfo& fi : std::as_const(camDirs))
         {
             if(fi.baseName().startsWith("cam"))
             {
@@ -264,13 +242,14 @@ void WorkManager::onFileSystemChanged(const QString& path)
     }else if(baseName.startsWith("cam") && baseName.length() == 4)
     {
         dir.cdUp();
-        dir.cdUp();
-
 
         if(dir.absolutePath().startsWith("Sensor_Data_"))
         {
             if(!sensorDirs.contains(dir.absolutePath()))
                 sensorDirs.enqueue(dir.absolutePath());
+
+            if(camWorkers[baseName].get())
+                Writter::error("No channel");
         }
     }
 
@@ -766,19 +745,23 @@ void WorkManager::readServerResult(const QString& camId)
         const QString requestId = result.value("requestId").toString();
         const QString pendingId = pendingRequestIds.value(camId);
 
-        if (requestId.isEmpty() || requestId != pendingId) {
+        if (requestId.isEmpty() || requestId != pendingId)
+        {
             Writter::warn(
                 QString("Ignore stale/unknown result (%1): received=%2 pending=%3")
                     .arg(camId, requestId, pendingId));
             continue;
         }
 
-        if (!result.value("success").toBool()) {
+        if (!result.value("success").toBool())
+        {
             const QString error = result.value("error").toString();
             Writter::error(QString("Summarize failed (%1): %2")
                            .arg(camId, error));
             completeCameraRequest(camId, requestId, false, error);
-        } else {
+        }
+        else
+        {
             Writter::info(QString("Summarize result (%1, %2): %3")
                           .arg(camId,
                                result.value("fileName").toString(),
@@ -787,7 +770,17 @@ void WorkManager::readServerResult(const QString& camId)
 
             // TODO
             QStringList vssInfo = answer.split("\n");
+            if(stopping || mission.id.isEmpty())
+            {
+                Writter::warn(QString("Ignore result after mission finish: %1").arg(camId));
+                continue;
+            }
 
+            if(mission.saveFolders.isEmpty())
+            {
+                Writter::error(QString("No save folder remains for %1").arg(camId));
+                continue;
+            }
             emit requestToProcessSensor(camId, mission.saveFolders.head(), vssInfo);
 
         }
@@ -1052,10 +1045,11 @@ void WorkManager::processSensor(const QString& camId, const QString& rootPath, Q
         missionCnt++;
         mission.saveFolders.dequeue();
         logger->addLog(processedFiles, text);
+
+        if(missionCnt == mission.targetScenes)
+            missionFinish(mission.id);
     }
 
-    if(missionCnt == mission.targetScenes)
-        missionFinish(mission.id);
 }
 
 void WorkManager::pauseVideoSending()

@@ -52,7 +52,7 @@ QVector<QString> CamWorker::getRawFiles(int timeInterval, int videoL)
 
 void CamWorker::addRawFile(const QString& rawFile)
 {
-
+    rawFiles.enqueue(rawFile);
 }
 
 void CamWorker::addRawFiles(const QString& dirPath)

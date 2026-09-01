@@ -27,6 +27,7 @@ public:
     QString getCamId();
     int rawFileSize();
     QVector<QString> getRawFiles(int, int);
+    void sendClip();
 
 public slots:
     QVector<QString> processClip(bool isSave, QString rootPath);

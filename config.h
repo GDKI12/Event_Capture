@@ -60,6 +60,7 @@ public:
 
             rootPath = QString::fromStdString(cRootPath);
             savePath = QString::fromStdString(cSavePath);
+            logPath = QString::fromStdString(cLogPath);
             ip = QString::fromStdString(cDstIp);
 
             port = toml::find<int>(data, "setting","dst_port");
