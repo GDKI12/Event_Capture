@@ -77,9 +77,8 @@ int CamWorker::getPort() {return dstPort;}
 
 QString CamWorker::getCamId(){return camId;}
 
-QVector<QString> CamWorker::processClip(bool isSave, QString rootPath)
+void CamWorker::processClip(bool isSave, QString rootPath)
 {
-    QVector<QString> resultList;
     QDir().mkpath(rootPath);
 
     if(isSave)
@@ -91,8 +90,6 @@ QVector<QString> CamWorker::processClip(bool isSave, QString rootPath)
 
             if(QFile::exists(filePath))
             {
-                resultList.append(dstPath);
-
 //                if(!QFile::rename(filePath, dstPath))
                 if(!QFile::copy(filePath, dstPath))
                     Writter::error(QString("Fail to move %1 to %2").arg(filePath, dstPath));
@@ -114,6 +111,4 @@ QVector<QString> CamWorker::processClip(bool isSave, QString rootPath)
     }
 
     trashList.clear();
-
-    return resultList;
 }

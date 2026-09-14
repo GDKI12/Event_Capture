@@ -1038,13 +1038,13 @@ void WorkManager::processSensor(const QString& camId, const QString& rootPath, Q
     bool isSave = decideToSave(text);
     QString path = savePath + rootPath;
     Writter::info(QString("Request process file to %1").arg(path));
-    QVector<QString> processedFiles = camWorkers[camId]->processClip(isSave, path);
+    camWorkers[camId]->processClip(isSave, path);
 
     if(isSave)
     {
         missionCnt++;
         mission.saveFolders.dequeue();
-        logger->addLog(processedFiles, text);
+        logger->addLog(path, text);
 
         if(missionCnt == mission.targetScenes)
             missionFinish(mission.id);

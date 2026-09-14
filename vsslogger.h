@@ -10,7 +10,7 @@ public:
     VssLogger(const QString& rootPath, QObject* parent = nullptr);
 
 public slots:
-    void addLog(QVector<QString> processedFiles, QStringList text);
+    void addLog(const QString& rootPath, QStringList text);
 
 private:
     QString filePath;

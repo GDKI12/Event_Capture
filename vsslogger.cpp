@@ -28,19 +28,13 @@ VssLogger::VssLogger(const QString& rootPath, QObject* parent) : QObject(parent)
     file.close();
 }
 
-void VssLogger::addLog(QVector<QString> processedFiles, QStringList text)
+void VssLogger::addLog(const QString& rootPath, QStringList text)
 {
     QFile file(filePath);
     QJsonObject obj;
-    QJsonArray fileArr;
 
     // 저장된파일의 경로를 저장하기위한 처리
-    for(const QString& s : processedFiles)
-    {
-        fileArr.append(s);
-    }
-
-    obj["files_path"] = fileArr;
+    obj["save_path"] = rootPath;
 
     // summarize 결과를 로그에 넣기위해서 데이터 가공
     for(QString& s : text)

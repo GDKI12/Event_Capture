@@ -30,7 +30,7 @@ public:
     void sendClip();
 
 public slots:
-    QVector<QString> processClip(bool isSave, QString rootPath);
+    void processClip(bool isSave, QString rootPath);
 
 private:
     QString camId;
