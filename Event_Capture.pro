@@ -15,19 +15,16 @@ DEFINES += QT_DEPRECATED_WARNINGS TEST
 # You can also select to disable deprecated APIs only up to a certain version of Qt.
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
-### toml11
-INCLUDEPATH += /home/tesla/3rdparty/toml11
-
 ### opencv-4.5.1
-INCLUDEPATH += /usr/local/include/opencv4
+INCLUDEPATH += /usr/include/opencv4
 
-### iceoryx - v2.90.0
-INCLUDEPATH += /usr/local/include/iceoryx/v2.90.0
+### toml11
+INCLUDEPATH += /home/cscho/3rdparty/toml11
 
-LIBS += -L/usr/local/lib -lopencv_world
-
-### iceoryx
-LIBS += -L/usr/local/lib -liceoryx_hoofs -liceoryx_platform -liceoryx_posh -liceoryx_posh_config -liceoryx_posh_gateway -liceoryx_posh_roudi
+LIBS += -lopencv_core \
+        -lopencv_imgproc \
+        -lopencv_imgcodecs \
+        -lopencv_highgui
 
 SOURCES += \
     apicontroller.cpp \
@@ -37,7 +34,6 @@ SOURCES += \
     workmanager.cpp
 
 HEADERS += \
-    vssProtocol.h \
     apicontroller.h \
     camworker.h \
     config.h \

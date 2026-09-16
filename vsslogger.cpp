@@ -15,6 +15,7 @@ VssLogger::VssLogger(const QString& rootPath, QObject* parent) : QObject(parent)
 
     QFile file(filePath);
 
+
     if(!file.open(QIODevice::WriteOnly))
     {
         Writter::info(QString("Fail to open log file %1").arg(filePath));

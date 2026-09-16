@@ -37,8 +37,6 @@ public:
             std::string cRootPath;
             std::string cSavePath;
             std::string cLogPath;
-            std::string cDstIp;
-            std::string cVssHealthyURL;
             std::string cBaseUrl;
             std::string cAuthId;
             std::string cSecretKey;
@@ -46,14 +44,11 @@ public:
             cRootPath = toml::find<std::string>(data, "setting", "root_path");
             cSavePath = toml::find<std::string>(data, "setting", "save_path");
             cLogPath = toml::find<std::string>(data,"setting", "log_path");
-            cDstIp = toml::find<std::string>(data, "setting","dst_ip");
 
-            cVssHealthyURL = toml::find<std::string>(data, "setting", "vss_healthy_url");
             cBaseUrl = toml::find<std::string>(data, "setting", "base_url");
             cAuthId = toml::find<std::string>(data, "setting", "auth_id");
             cSecretKey = toml::find<std::string>(data, "setting", "secret_key");
 
-            vssHealthyURL = QString::fromStdString(cVssHealthyURL);
             baseURL = QString::fromStdString(cBaseUrl);
             authId = QString::fromStdString(cAuthId);
             secretKey = QString::fromStdString(cSecretKey);
@@ -61,9 +56,7 @@ public:
             rootPath = QString::fromStdString(cRootPath);
             savePath = QString::fromStdString(cSavePath);
             logPath = QString::fromStdString(cLogPath);
-            ip = QString::fromStdString(cDstIp);
 
-            port = toml::find<int>(data, "setting","dst_port");
             timeInterval = toml::find<int>(data, "setting","time_interval");
             timeInterval *= 10;
 
@@ -84,7 +77,6 @@ public:
         }
     }
 public:
-    QString vssHealthyURL;
     QString baseURL;
     QString authId;
     QString secretKey;
@@ -92,8 +84,7 @@ public:
     QString rootPath;
     QString savePath;
     QString logPath;
-    QString ip;
-    int port;
+
     int videoLength;
     int timeInterval;
     int width;

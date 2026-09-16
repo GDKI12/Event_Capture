@@ -20,23 +20,29 @@ class CamWorker : public QObject
 {
     Q_OBJECT
 public:
-    explicit CamWorker(const QString& camId, int port, QObject* parent = nullptr);
-    void addRawFiles(const QString&);
+    explicit CamWorker(const QString& camId, QObject* parent = nullptr);
+    void setSensorDirs(const QVector<QString>& dirList);
+
+    void setRawFiles(const QString& dirPath);
     void addRawFile(const QString&);
-    int getPort();
+
+    bool sensorDirIsEmpty();
     QString getCamId();
     int rawFileSize();
-    QVector<QString> getRawFiles(int, int);
-    void sendClip();
+    QVector<QString> getRawFiles(int);
 
 public slots:
     void processClip(bool isSave, QString rootPath);
+    void changeDir();
+
+
+signals:
+    void finishCreateClip();
+    void requestCreateClip(const QString& camId, const QVector<QString>& clips);
 
 private:
     QString camId;
-    QString dstIp;
-    int dstPort;
-
+    QQueue<QString> sensorDirs;
     QQueue<QString> rawFiles;
     QVector<QString> trashList;
 };

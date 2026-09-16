@@ -27,23 +27,26 @@ namespace VSS {
     }
 }
 
-CamWorker::CamWorker(const QString& camId,int port, QObject* parent)
-    : QObject(parent), camId(camId), dstPort(port)
+CamWorker::CamWorker(const QString& camId, QObject* parent)
+    : QObject(parent), camId(camId)
 {
-    Writter::info(QString("Worker(%1) is working on %2 port").arg(camId).arg(port));
+    Writter::info(QString("Worker(%1) is working").arg(camId));
 }
 
 
-QVector<QString> CamWorker::getRawFiles(int timeInterval, int videoL)
+QVector<QString> CamWorker::getRawFiles(int videoL)
 {
     QVector<QString> result;
-    for(int i = 0; i < timeInterval; i++)
+
+    if(videoL <= 0 || rawFiles.size() < videoL)
     {
-        if(i < videoL)
-            result.push_back(rawFiles.dequeue());
-        else
-            rawFiles.dequeue();
+        Writter::warn(QString("Worker(%1): insufficient raw files (%2 requested, %3 available)")
+                      .arg(camId).arg(videoL).arg(rawFiles.size()));
+        return result;
     }
+
+    for(int i = 0; i < videoL; i++)
+        result.push_back(rawFiles.dequeue());
 
     trashList = result;
 
@@ -55,7 +58,15 @@ void CamWorker::addRawFile(const QString& rawFile)
     rawFiles.enqueue(rawFile);
 }
 
-void CamWorker::addRawFiles(const QString& dirPath)
+// 파일모드시 처리할 디렉토리들저장
+void CamWorker::setSensorDirs(const QVector<QString>& dirList)
+{
+    for(const QString& dir : dirList)
+        sensorDirs.enqueue(dir);
+}
+
+//
+void CamWorker::setRawFiles(const QString& dirPath)
 {
     // delete raw files
     rawFiles.clear();
@@ -73,10 +84,9 @@ void CamWorker::addRawFiles(const QString& dirPath)
 
 int CamWorker::rawFileSize(){ return rawFiles.size(); }
 
-int CamWorker::getPort() {return dstPort;}
-
 QString CamWorker::getCamId(){return camId;}
 
+bool CamWorker::sensorDirIsEmpty(){ return sensorDirs.isEmpty(); }
 void CamWorker::processClip(bool isSave, QString rootPath)
 {
     QDir().mkpath(rootPath);
@@ -111,4 +121,11 @@ void CamWorker::processClip(bool isSave, QString rootPath)
     }
 
     trashList.clear();
+}
+
+void CamWorker::changeDir()
+{
+    QString workDir = sensorDirs.dequeue();
+    Writter::info("Current Working directory is " + workDir);
+    setRawFiles(workDir);
 }
