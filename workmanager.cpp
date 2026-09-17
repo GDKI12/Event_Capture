@@ -198,15 +198,16 @@ QString WorkManager::infer(const QString& camId, const QString& videoPath)
 
                 qDebug().noquote() << reasoning;
                 qDebug() << "";
+                emit finishInfer(camId);
             }
 
         }else
         {
             Writter::error("Fail to VLM infer");
+            return;
         }
 
         reply->deleteLater();
-        emit finishInfer(camId);
 
     });
 

@@ -198,7 +198,7 @@ void APIController::onAPIFinished(QNetworkReply *reply)
                 start = true;
                 pullingMission();
             }
-        }else if(apiType == "progress")
+        }else if(apiType == "camWorkers[camId] = std::make_shared<CamWorker>(camId, this);")
         {
 
         }else if(apiType == "collected")

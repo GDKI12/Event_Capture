@@ -38,7 +38,7 @@ public slots:
 
 signals:
     void finishCreateClip();
-    void requestCreateClip(const QString& camId, const QVector<QString>& clips);
+//    void requestCreateClip(const QString& camId, const QVector<QString>& clips);
 
 private:
     QString camId;

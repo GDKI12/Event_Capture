@@ -19,7 +19,7 @@ DEFINES += QT_DEPRECATED_WARNINGS TEST
 INCLUDEPATH += /usr/include/opencv4
 
 ### toml11
-INCLUDEPATH += /home/cscho/3rdparty/toml11
+INCLUDEPATH += /home/tesla/3rdparty/toml11
 
 LIBS += -lopencv_core \
         -lopencv_imgproc \

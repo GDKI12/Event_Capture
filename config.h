@@ -17,8 +17,7 @@
 #include <QJsonArray>
 
 const QString DEFAULT_PATH = "../config/config.toml";
-const QString SENSOR_LIST_FILE = "/home/tesla/EdgeInfravision/EdgeInfra_Capture_v4/config/sensor_list.json";
-
+const QString PORMPT_FILE_PATH = "../config/prompt.json";
 
 class Config
 {
@@ -67,14 +66,32 @@ public:
             width = toml::find<int>(data, "setting", "width");
             height = toml::find<int>(data, "setting", "height");
 
-            QFile snesorListFile(SENSOR_LIST_FILE);
-
-
 
         } catch (const std::exception& e)
         {
             qCritical() << "failed to load config settings";
         }
+    }
+
+    QString getPrompt(const QString& scenario)
+    {
+        QFile file(PORMPT_FILE_PATH);
+        if(!file.open(QIODevice::ReadOnly))
+        {
+            qCritical() << "Failt to open prompt file";
+            return QString();
+        }
+
+        QByteArray root = file.readAll();
+        file.close();
+
+        QJsonDocument doc = QJsonDocument::fromJson(root);
+        QJsonObject data = doc.object();
+        QString prompt = data[scenario].toString();
+
+        return prompt;
+        qDebug() << "TEST";
+
     }
 public:
     QString baseURL;
