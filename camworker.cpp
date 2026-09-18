@@ -28,14 +28,19 @@ namespace VSS {
 }
 
 CamWorker::CamWorker(const QString& camId, QObject* parent)
-    : QObject(parent), camId(camId)
+    : QObject(parent), camId(camId), inferStatus(false)
 {
     Writter::info(QString("Worker(%1) is working").arg(camId));
 }
 
+bool CamWorker::getStatus(){return inferStatus;}
+
+void CamWorker::setStatus(bool status){this->inferStatus = status;}
 
 QVector<QString> CamWorker::getRawFiles(int videoL)
 {
+    Writter::info(QString("Process raw files of %1 %2/%3").arg(camId).arg(rawFileSize()).arg(videoL));
+
     QVector<QString> result;
 
     if(videoL <= 0 || rawFiles.size() < videoL)
@@ -55,6 +60,7 @@ QVector<QString> CamWorker::getRawFiles(int videoL)
 
 void CamWorker::addRawFile(const QString& rawFile)
 {
+//    Writter::info(QString("Insert %1 to queue of %2  %3").arg(rawFile, camId, QString::number(rawFileSize())));
     rawFiles.enqueue(rawFile);
 }
 

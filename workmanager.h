@@ -14,6 +14,8 @@
 #include "define.h"
 #include "vsslogger.h"
 
+const QString PORMPT_FILE_PATH = "../config/prompt.json";
+
 class WorkManager : public QObject
 {
     Q_OBJECT
@@ -26,10 +28,11 @@ private:
     bool decideToSave(QStringList answers);
     void processSensor(const QString& camId, const QString& rootPath , QStringList text);
     void missionFinish(const QString&);
+    QString createPrompt();
     void createVideo(const QString& camId, const QVector<QString>& clips);
     void createVideo(const QString& camId, std::function<QVector<QString>(int)>);
     bool isVLMAlive();
-    QString infer(const QString& camId, const QString& videoPath);
+    void infer(const QString& camId, const QString& videoPath);
     void nextClip(const QString& camId);
 signals:
     // 클립 추론 요청

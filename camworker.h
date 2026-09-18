@@ -30,6 +30,8 @@ public:
     QString getCamId();
     int rawFileSize();
     QVector<QString> getRawFiles(int);
+    bool getStatus();
+    void setStatus(bool);
 
 public slots:
     void processClip(bool isSave, QString rootPath);
@@ -45,6 +47,8 @@ private:
     QQueue<QString> sensorDirs;
     QQueue<QString> rawFiles;
     QVector<QString> trashList;
+
+    bool inferStatus;
 };
 
 #endif // CAMWORKER_H

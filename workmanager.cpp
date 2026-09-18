@@ -116,7 +116,7 @@ bool WorkManager::isVLMAlive()
     return isAlive;
 }
 
-QString WorkManager::infer(const QString& camId, const QString& videoPath)
+void WorkManager::infer(const QString& camId, const QString& videoPath)
 {
     QString result;
     QString fileURL = "file://" + videoPath;
@@ -195,7 +195,7 @@ QString WorkManager::infer(const QString& camId, const QString& videoPath)
 
                 QString reasoning =
                     message["reasoning"].toString();
-
+                Writter::info(QString("[%1]").arg(camId));
                 qDebug().noquote() << reasoning;
                 qDebug() << "";
                 emit finishInfer(camId);
@@ -204,15 +204,13 @@ QString WorkManager::infer(const QString& camId, const QString& videoPath)
         }else
         {
             Writter::error("Fail to VLM infer");
+            camWorkers[camId]->setStatus(false);
             return;
         }
 
         reply->deleteLater();
 
     });
-
-
-    return result;
 }
 
 void WorkManager::init(const Mission& mission)
@@ -253,10 +251,13 @@ void WorkManager::onFileSystemChanged(const QString& path)
         for(const QString& f : std::as_const(curSensors))
         {
             if(!watcher.directories().contains(f))
-                watcher.addPath(f);
+            {
+                for(const QString& camId : config.camList)
+                    watcher.addPath(f + "/" + camId);
+            }
         }
 
-    }else if(baseName.startsWith("Sensor_Data_"))
+    }else if(baseName.startsWith("Sensor_Data"))
     {
         QFileInfoList camDirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
 
@@ -275,25 +276,22 @@ void WorkManager::onFileSystemChanged(const QString& path)
 
         QFileInfoList fiList = dir.entryInfoList({"*raw"}, QDir::Files | QDir::NoDotAndDotDot);
 
-        QFileInfo latestFile;
-        QDateTime latestTime;
+        const QFileInfo latestFile = fiList.constLast();
+        const QString rawPath = latestFile.absoluteFilePath();
 
-        for(const QFileInfo& fi : fiList)
+        if(!camWorkers[baseName]->getStatus())
         {
-            QDateTime createdTime = fi.birthTime();
+            camWorkers[baseName]->addRawFile(rawPath);
+//            Writter::info(QString("Insert %1 in %2").arg(rawPath, baseName));
 
-            if(createdTime.isValid() && (!latestTime.isValid() || createdTime > latestTime))
+            if(camWorkers[baseName]->rawFileSize() >= videoLength)
             {
-                latestTime = createdTime;
-                latestFile = fi;
+                if(!camWorkers[baseName]->getStatus())
+                {
+                    camWorkers[baseName]->setStatus(true);
+                    createVideo(baseName, camWorkers[baseName]->getRawFiles(videoLength));
+                }
             }
-        }
-
-        camWorkers[baseName]->addRawFile(latestFile.absoluteFilePath());
-
-        if(camWorkers[baseName]->rawFileSize() >= videoLength)
-        {
-            createVideo(baseName, camWorkers[baseName]->getRawFiles(videoLength));
         }
     }
 
@@ -301,7 +299,36 @@ void WorkManager::onFileSystemChanged(const QString& path)
 
 void WorkManager::startLiveMode()
 {
+    Writter::info("Start to live mode");
+
+
+    for(const QString& camId : config.camList)
+    {
+        camWorkers[camId] = std::make_shared<CamWorker>(camId, this);
+    }
+
     watcher.addPath(rootPath);
+
+    QDir dir(rootPath);
+    QFileInfoList fiList = dir.entryInfoList({"Sensor_Data*"}, QDir::Dirs | QDir::NoDotAndDotDot,
+                                             QDir::Name);
+
+    if(fiList.isEmpty())
+    {
+        Writter::warn("No Working capture program, check it!!");
+        return;
+    }
+
+    const QFileInfo lastSensorFi = fiList.constLast();
+    QString lastSensorDirPath = lastSensorFi.absoluteFilePath();
+    QDir lastSensorDir(lastSensorDirPath);
+
+    QStringList subList = lastSensorDir.entryList({"cam*"}, QDir::Dirs | QDir::NoDotAndDotDot);
+    for(const QString& sub : subList)
+    {
+        QString currentSensorCamDir = lastSensorDirPath + "/" + sub;
+        watcher.addPath(currentSensorCamDir);
+    }
 }
 void WorkManager::startFileMode()
 {
@@ -343,6 +370,28 @@ void WorkManager::startFileMode()
 
 }
 
+QString WorkManager::createPrompt()
+{
+    QFile file(PORMPT_FILE_PATH);
+
+    if(!file.open(QIODevice::ReadOnly))
+    {
+        Writter::error("Fail to open prompt file");
+        return "";
+    }
+
+    QByteArray data = file.readAll();
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    QJsonObject root = doc.object();
+    QJsonObject events = root["event"].toObject();
+    QJsonObject composition = root["composition"].toObject();
+
+    for(const QString &key : mission.scenario)
+    {
+
+    }
+
+}
 
 void WorkManager::stop()
 {
@@ -364,11 +413,13 @@ void WorkManager::createVideo(const QString& camId, const QVector<QString>& clip
     if(width <= 0 || height <= 0 || rawBytes > std::numeric_limits<int>::max())
     {
         Writter::error("Invalid raw frame dimensions");
+        camWorkers[camId]->setStatus(false);
         return;
     }
     if(!QDir().mkpath(savePath))
     {
         Writter::error(QString("Failed to create video output directory: %1").arg(savePath));
+        camWorkers[camId]->setStatus(false);
         return;
     }
 
@@ -404,6 +455,7 @@ void WorkManager::createVideo(const QString& camId, const QVector<QString>& clip
     if(!ffmpeg.waitForStarted(30000))
     {
         Writter::error("Failt to start ffmpeg");
+        camWorkers[camId]->setStatus(false);
         return;
     }
 
@@ -415,6 +467,7 @@ void WorkManager::createVideo(const QString& camId, const QVector<QString>& clip
 
         if(!in.open(QIODevice::ReadOnly)) {
             Writter::error(QString("Failed to open raw file: %1").arg(file));
+            camWorkers[camId]->setStatus(false);
             return;
         }
 
@@ -427,6 +480,7 @@ void WorkManager::createVideo(const QString& camId, const QVector<QString>& clip
                     .arg(in.fileName()).arg(readBytes).arg(rawBytes);
 
             Writter::error(log);
+            camWorkers[camId]->setStatus(false);
             return;
         }
 
@@ -439,6 +493,7 @@ void WorkManager::createVideo(const QString& camId, const QVector<QString>& clip
             {
                 QString error = ffmpeg.errorString();
                 Writter::error(QString("FFmpeg write failed: %1").arg(error));
+                camWorkers[camId]->setStatus(false);
                 return;
             }
 
@@ -448,6 +503,7 @@ void WorkManager::createVideo(const QString& camId, const QVector<QString>& clip
             {
                 Writter::error(QString("FFmpeg write failed: %1; stderr: %2")
                               .arg(ffmpeg.errorString(), QString::fromLocal8Bit(ffmpeg.readAllStandardError())));
+                camWorkers[camId]->setStatus(false);
                 return;
             }
         }
@@ -463,13 +519,14 @@ void WorkManager::createVideo(const QString& camId, const QVector<QString>& clip
         ffmpeg.kill();
         ffmpeg.waitForFinished();
 
+        camWorkers[camId]->setStatus(false);
         return;
     }
 
     if(ffmpeg.exitStatus() != QProcess::NormalExit || ffmpeg.exitCode() != 0)
     {
         Writter::error(QString("FFmpeg failed: %1").arg(QString::fromLocal8Bit(ffmpeg.readAllStandardError())));
-
+        camWorkers[camId]->setStatus(false);
         return;
     }
 
@@ -489,17 +546,22 @@ void WorkManager::createVideo(const QString& camId, std::function<QVector<QStrin
 void WorkManager::nextClip(const QString& camId)
 {
     const auto worker = camWorkers.value(camId);
-    if(stopping || !worker || videoLength <= 0
-            || ((worker->rawFileSize() < videoLength) && worker->sensorDirIsEmpty()) )
+    if(!mode)
     {
-        if(worker->rawFileSize() < videoLength && !mode)
+        if(stopping || !worker || videoLength <= 0
+                || ((worker->rawFileSize() < videoLength) && worker->sensorDirIsEmpty()) )
         {
-            worker->changeDir();
-            createVideo(camId, worker->getRawFiles(videoLength));
+            if(worker->rawFileSize() < videoLength && !mode)
+            {
+                worker->changeDir();
+                createVideo(camId, worker->getRawFiles(videoLength));
+            }
+            return;
         }
-        return;
+
+    }else{
+        worker->setStatus(false);
     }
-    createVideo(camId, worker->getRawFiles(videoLength));
 }
 bool WorkManager::decideToSave(QStringList answers)
 {

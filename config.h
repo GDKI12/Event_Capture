@@ -17,7 +17,6 @@
 #include <QJsonArray>
 
 const QString DEFAULT_PATH = "../config/config.toml";
-const QString PORMPT_FILE_PATH = "../config/prompt.json";
 
 class Config
 {
@@ -39,6 +38,12 @@ public:
             std::string cBaseUrl;
             std::string cAuthId;
             std::string cSecretKey;
+
+            std::vector<std::string> camVector
+                    = toml::find<std::vector<std::string>>(data, "setting", "cam_list");
+
+            for(const std::string& cam : camVector)
+                camList.append(QString::fromStdString(cam));
 
             cRootPath = toml::find<std::string>(data, "setting", "root_path");
             cSavePath = toml::find<std::string>(data, "setting", "save_path");
@@ -101,6 +106,8 @@ public:
     QString rootPath;
     QString savePath;
     QString logPath;
+
+    QList<QString> camList;
 
     int videoLength;
     int timeInterval;
