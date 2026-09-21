@@ -2,7 +2,9 @@
 #define WORKMANAGER_H
 
 #include <QMap>
+#include <QSet>
 #include <QObject>
+#include <QNetworkReply>
 #include <QTcpServer>
 #include <QTimer>
 #include <QUuid>
@@ -34,6 +36,7 @@ private:
     bool isVLMAlive();
     void infer(const QString& camId, const QString& videoPath);
     void nextClip(const QString& camId);
+    void cancelPendingInferences();
 signals:
     // 클립 추론 요청
     void requestInfer(const QString& camId, const QString& videoPath);
@@ -59,6 +62,7 @@ private:
     VssLogger* logger;
     QFileSystemWatcher watcher;
     QHash<QString, std::shared_ptr<CamWorker>> camWorkers;
+    QSet<QNetworkReply*> inferenceReplies;
 
     Config config;
 

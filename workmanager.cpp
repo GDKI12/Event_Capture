@@ -118,7 +118,16 @@ bool WorkManager::isVLMAlive()
 
 void WorkManager::infer(const QString& camId, const QString& videoPath)
 {
-    QString result;
+    if(stopping || mission.id.isEmpty())
+    {
+        const auto worker = camWorkers.value(camId);
+        if(worker)
+            worker->cancelCurrentBatch();
+        QFile::remove(videoPath);
+        return;
+    }
+
+    const QString requestMissionId = mission.id;
     QString fileURL = "file://" + videoPath;
 
     QNetworkRequest request(QUrl("http://127.0.0.1:8000/v1/chat/completions"));
@@ -162,8 +171,22 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
 
 
     QNetworkReply* reply = manager->post(request, body);
+    inferenceReplies.insert(reply);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, camId, inferTimer](){
+    connect(reply, &QNetworkReply::finished, this,
+            [this, reply, camId, videoPath, requestMissionId, inferTimer](){
+        inferenceReplies.remove(reply);
+
+        if(reply->error() == QNetworkReply::OperationCanceledError
+                || stopping
+                || requestMissionId != mission.id)
+        {
+            Writter::info(QString("[%1] Ignore canceled/stale inference result").arg(camId));
+            QFile::remove(videoPath);
+            reply->deleteLater();
+            return;
+        }
+
         if(reply->error() == QNetworkReply::NoError)
         {
             // 측정 결과
@@ -193,24 +216,35 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
                 QJsonObject message =
                     choice["message"].toObject();
 
-                QString reasoning =
-                    message["reasoning"].toString();
+                QString reasoning = message["content"].toString();
+                if(reasoning.trimmed().isEmpty())
+                    reasoning = message["reasoning"].toString();
+
                 Writter::info(QString("[%1]").arg(camId));
                 qDebug().noquote() << reasoning;
                 qDebug() << "";
 
-                if(!stopping)
-                {
+                // 현재 배치를 먼저 저장/폐기한 뒤 다음 배치를 시작한다.
+                emit requestToProcessSensor(camId, reasoning.split("\n\n"));
+
+                if(!stopping && requestMissionId == mission.id)
                     emit finishInfer(camId);
-                    emit requestToProcessSensor(camId, reasoning.split("\n\n"));
-                }
+            }
+            else
+            {
+                Writter::error(QString("[%1] VLM response has no choices").arg(camId));
+                const auto worker = camWorkers.value(camId);
+                if(worker)
+                    worker->cancelCurrentBatch();
             }
 
         }else
         {
-            Writter::error("Fail to VLM infer");
-            camWorkers[camId]->setStatus(false);
-            return;
+            Writter::error(QString("[%1] Fail to VLM infer: %2")
+                           .arg(camId, reply->errorString()));
+            const auto worker = camWorkers.value(camId);
+            if(worker)
+                worker->cancelCurrentBatch();
         }
 
         reply->deleteLater();
@@ -436,6 +470,14 @@ void WorkManager::stop()
 {
     stopping = true;
 
+    cancelPendingInferences();
+
+    for(auto it = camWorkers.begin(); it != camWorkers.end(); ++it)
+    {
+        if(it.value())
+            it.value()->cancelCurrentBatch();
+    }
+
     const QStringList paths = watcher.directories();
     if(!paths.isEmpty())
         watcher.removePaths(watcher.directories());
@@ -593,10 +635,16 @@ void WorkManager::createVideo(const QString& camId, std::function<QVector<QStrin
 
 void WorkManager::nextClip(const QString& camId)
 {
+    if(stopping || mission.id.isEmpty() || videoLength <= 0)
+        return;
+
     const auto worker = camWorkers.value(camId);
+    if(!worker)
+        return;
+
     if(!mode)
     {
-        if(stopping || !worker || videoLength <= 0 || (worker->rawFileSize() < videoLength)
+        if((worker->rawFileSize() < videoLength)
                 || ((worker->rawFileSize() < videoLength) && worker->sensorDirIsEmpty()) )
         {
             if(worker->rawFileSize() < videoLength && !mode)
@@ -629,17 +677,33 @@ bool WorkManager::decideToSave(QStringList answers)
 
 void WorkManager::processSensor(const QString& camId, QStringList text)
 {
-    if(stopping)
+    if(stopping || mission.id.isEmpty())
     {
         return;
     }
     bool isSave = decideToSave(text);
 
-    if(mission.saveFolders.isEmpty())
+    if(isSave && mission.saveFolders.isEmpty())
+    {
+        Writter::warn(QString("[%1] No save folder remains").arg(camId));
+        const auto worker = camWorkers.value(camId);
+        if(worker)
+            worker->cancelCurrentBatch();
         return;
-    QString path = savePath + mission.saveFolders.first();
-    Writter::info(QString("Request process file to %1").arg(path));
-    camWorkers[camId]->processClip(isSave, path);
+    }
+
+    QString path;
+    if(isSave)
+    {
+        path = savePath + mission.saveFolders.first();
+        Writter::info(QString("Request process file to %1").arg(path));
+    }
+
+    const auto worker = camWorkers.value(camId);
+    if(!worker)
+        return;
+
+    worker->processClip(isSave, path);
 
     if(isSave)
     {
@@ -647,7 +711,7 @@ void WorkManager::processSensor(const QString& camId, QStringList text)
         mission.saveFolders.dequeue();
         logger->addLog(path, text);
 
-        if(missionCnt == mission.targetScenes)
+        if(missionCnt >= mission.targetScenes)
             missionFinish(mission.id);
     }
 
@@ -656,19 +720,49 @@ void WorkManager::processSensor(const QString& camId, QStringList text)
 
 void WorkManager::missionFinish(const QString& id)
 {
+    if(stopping)
+        return;
+
+    // 먼저 종료 상태를 설정해야 abort로 발생하는 finished 콜백이 무시된다.
+    stopping = true;
+
+    cancelPendingInferences();
+
+    for(auto it = camWorkers.begin(); it != camWorkers.end(); ++it)
+    {
+        if(it.value())
+            it.value()->cancelCurrentBatch();
+    }
+
+    const QStringList watchedPaths = watcher.directories();
+    if(!watchedPaths.isEmpty())
+        watcher.removePaths(watchedPaths);
+
     qDebug() << "Start to pulling mission";
     missionTimer->start();
     apiController->finishMission(id);
 
-    stopping = true;
     mission.id.clear();
     mission.deviceType.clear();
     mission.weather.clear();
     mission.time.clear();
     mission.roadEnv.clear();
     mission.scenario.clear();
+    mission.saveFolders.clear();
     mission.clipLengthSec = 0;
     mission.targetScenes = 0;
 
     missionCnt = 0;
+}
+
+void WorkManager::cancelPendingInferences()
+{
+    // abort()가 finished 신호를 발생시킬 수 있으므로 복사본을 순회한다.
+    const QList<QNetworkReply*> replies = inferenceReplies.values();
+
+    for(QNetworkReply* reply : replies)
+    {
+        if(reply && reply->isRunning())
+            reply->abort();
+    }
 }

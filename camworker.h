@@ -32,6 +32,7 @@ public:
     QVector<QString> getRawFiles(int);
     bool getStatus();
     void setStatus(bool);
+    void cancelCurrentBatch();
 
 public slots:
     void processClip(bool isSave, QString rootPath);
