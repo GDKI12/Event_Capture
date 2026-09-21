@@ -39,7 +39,7 @@ void CamWorker::setStatus(bool status){this->inferStatus = status;}
 
 QVector<QString> CamWorker::getRawFiles(int videoL)
 {
-    Writter::info(QString("Process raw files of %1 %2/%3").arg(camId).arg(rawFileSize()).arg(videoL));
+    Writter::info(QString("Process raw files of %1 %2/%3").arg(camId).arg(videoL).arg(rawFileSize()));
 
     QVector<QString> result;
 

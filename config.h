@@ -78,26 +78,6 @@ public:
         }
     }
 
-    QString getPrompt(const QString& scenario)
-    {
-        QFile file(PORMPT_FILE_PATH);
-        if(!file.open(QIODevice::ReadOnly))
-        {
-            qCritical() << "Failt to open prompt file";
-            return QString();
-        }
-
-        QByteArray root = file.readAll();
-        file.close();
-
-        QJsonDocument doc = QJsonDocument::fromJson(root);
-        QJsonObject data = doc.object();
-        QString prompt = data[scenario].toString();
-
-        return prompt;
-        qDebug() << "TEST";
-
-    }
 public:
     QString baseURL;
     QString authId;

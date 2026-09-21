@@ -26,7 +26,7 @@ public:
 
 private:
     bool decideToSave(QStringList answers);
-    void processSensor(const QString& camId, const QString& rootPath , QStringList text);
+    void processSensor(const QString& camId , QStringList text);
     void missionFinish(const QString&);
     QString createPrompt();
     void createVideo(const QString& camId, const QVector<QString>& clips);
@@ -41,7 +41,7 @@ signals:
     // 클립 추론 종료
     void finishInfer(const QString& camId);
 
-    void requestToProcessSensor(const QString& camId, const QString& rootPath, QStringList text);
+    void requestToProcessSensor(const QString& camId, QStringList text);
 
 public slots:
     void startFileMode();
@@ -52,6 +52,7 @@ public slots:
 
 
 private:
+    QString prompt;
     QList<QString> camIds;
     QNetworkAccessManager *manager;
     APIController* apiController;
@@ -69,7 +70,6 @@ private:
     Mission mission;
     QTimer* healthyTimer;
     QTimer* missionTimer;
-
 
     int camN;
 

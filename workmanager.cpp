@@ -133,23 +133,7 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
 
     QJsonObject textObj;
     textObj["type"] = "text";
-    textObj["text"] = R"(Analyze the entire driving video and determine whether the following event occurs:
-
-            Event: lane_keep
-
-            Determine whether the ego vehicle maintains its current lane while driving.
-
-            Consider this event to have occurred only if the ego vehicle continuously travels within the same lane without changing lanes or merging into another lane.
-
-            Use the temporal sequence of the video rather than a single frame. Do not classify the event based only on the presence of lane markings.
-
-            If the event clearly occurs, answer YES and briefly describe the visible evidence.
-            Otherwise, answer NO.
-
-            Output:
-            Event: lane_keep
-            Occurred: YES or NO
-            Evidence: <brief explanation>)";
+    textObj["text"] = prompt;
 
     QJsonArray contentArr;
     contentArr.append(videoObj);
@@ -172,14 +156,30 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
     QJsonDocument doc(root);
     QByteArray body = doc.toJson(QJsonDocument::Compact);
 
+    // 추론시간 측정시작
+    QElapsedTimer inferTimer;
+    inferTimer.start();
+
+
     QNetworkReply* reply = manager->post(request, body);
 
-    connect(reply, &QNetworkReply::finished, this, [this, reply, camId](){
+    connect(reply, &QNetworkReply::finished, this, [this, reply, camId, inferTimer](){
         if(reply->error() == QNetworkReply::NoError)
         {
+            // 측정 결과
+            const qint64 elapsedMs = inferTimer.elapsed();
+            const double elapsedSec =
+                          static_cast<double>(elapsedMs) / 1000.0;
+
+            Writter::info(QString("[%1] VLM inference finished: %2 ms (%3 sec)")
+                          .arg(camId)
+                          .arg(elapsedMs)
+                          .arg(elapsedSec, 0, 'f', 3));
+            // 측정 끝
+
+
 
             QByteArray response = reply->readAll();
-
             QJsonParseError parseError;
             QJsonDocument doc = QJsonDocument::fromJson(response, &parseError);
 
@@ -198,7 +198,12 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
                 Writter::info(QString("[%1]").arg(camId));
                 qDebug().noquote() << reasoning;
                 qDebug() << "";
-                emit finishInfer(camId);
+
+                if(!stopping)
+                {
+                    emit finishInfer(camId);
+                    emit requestToProcessSensor(camId, reasoning.split("\n\n"));
+                }
             }
 
         }else
@@ -219,6 +224,9 @@ void WorkManager::init(const Mission& mission)
     this->mission = mission;
     videoLength = mission.clipLengthSec * 10;
 
+    prompt.clear();
+
+    prompt = createPrompt();
     Writter::info("Success to initialize");
 
     stopping = false;
@@ -276,6 +284,12 @@ void WorkManager::onFileSystemChanged(const QString& path)
 
         QFileInfoList fiList = dir.entryInfoList({"*raw"}, QDir::Files | QDir::NoDotAndDotDot);
 
+        if(fiList.isEmpty())
+        {
+            Writter::info("No raw file");
+            return;
+        }
+
         const QFileInfo latestFile = fiList.constLast();
         const QString rawPath = latestFile.absoluteFilePath();
 
@@ -330,6 +344,7 @@ void WorkManager::startLiveMode()
         watcher.addPath(currentSensorCamDir);
     }
 }
+
 void WorkManager::startFileMode()
 {
     QVector<QString> sensorDirs;
@@ -383,14 +398,38 @@ QString WorkManager::createPrompt()
     QByteArray data = file.readAll();
     QJsonDocument doc = QJsonDocument::fromJson(data);
     QJsonObject root = doc.object();
-    QJsonObject events = root["event"].toObject();
+
+    QJsonObject events = root["events"].toObject();
     QJsonObject composition = root["composition"].toObject();
+
+    QStringList eventPrompts;
+    QStringList outputEventName;
 
     for(const QString &key : mission.scenario)
     {
+        if(events.contains("any"))
+            return "";
+
+        if(!events.contains(key))
+            continue;
+
+        QJsonObject event = events[key].toObject();
+        eventPrompts.append(event["prompt"].toString());
+        outputEventName.append(event["output_event"].toString());
 
     }
 
+    QString header = composition["selected_event_header_template"].toString();
+    header.replace("{{SELECTED_EVENT_NAMES}}",
+                   outputEventName.join(composition["selected_event_names_separator"].toString()));
+
+    QString finalPrompt = QStringList{
+            root["common_prompt"].toString(),
+            header,
+            eventPrompts.join(composition["event_separator"].toString()),
+            root["output_prompt"].toString()}.join("\n\n");
+
+    return finalPrompt;
 }
 
 void WorkManager::stop()
@@ -533,7 +572,16 @@ void WorkManager::createVideo(const QString& camId, const QVector<QString>& clip
     Writter::info(QString("Video created: %1").arg(clipPath));
 
     // 해당영상 추론 요청
-    emit requestInfer(camId, clipPath);
+    if(!prompt.isEmpty())
+    {
+        emit requestInfer(camId, clipPath);
+    }
+    else
+    {
+        QString path = savePath + "";
+        camWorkers[camId]->processClip(true, path);
+    }
+
 }
 
 
@@ -548,16 +596,27 @@ void WorkManager::nextClip(const QString& camId)
     const auto worker = camWorkers.value(camId);
     if(!mode)
     {
-        if(stopping || !worker || videoLength <= 0
+        if(stopping || !worker || videoLength <= 0 || (worker->rawFileSize() < videoLength)
                 || ((worker->rawFileSize() < videoLength) && worker->sensorDirIsEmpty()) )
         {
             if(worker->rawFileSize() < videoLength && !mode)
             {
-                worker->changeDir();
-                createVideo(camId, worker->getRawFiles(videoLength));
+                // 여기서 index 에러발생
+                if(!worker->sensorDirIsEmpty())
+                {
+                    worker->changeDir();
+                    createVideo(camId, worker->getRawFiles(videoLength));
+                }
+                else
+                {
+                    Writter::info("Finish process");
+                    return;
+                }
             }
             return;
         }
+
+        createVideo(camId, worker->getRawFiles(videoLength));
 
     }else{
         worker->setStatus(false);
@@ -565,129 +624,20 @@ void WorkManager::nextClip(const QString& camId)
 }
 bool WorkManager::decideToSave(QStringList answers)
 {
-    bool isSave = false;
-    QString weatherInfo;
-    QString timeInfo;
-    QString roadInfo;
-    QString eventInfo;
-
-    bool isWeather = false;
-    bool isTime = false;
-    bool isRoad = false;
-    bool isEvent = false;
-
-
-    for(const QString& s : answers)
-    {
-        QStringList row = s.split(':');
-
-        if(row[0].trimmed() == "Weather")
-            weatherInfo = row[1].trimmed();
-        else if(row[0].trimmed() == "Time")
-            timeInfo = row[1].trimmed();
-        else if(row[0].trimmed() == "Road")
-            roadInfo = row[1].trimmed();
-        else if(row[0].trimmed() == "Event")
-        {
-            if(eventInfo.isEmpty())
-                eventInfo = row[1].trimmed();
-            else
-                eventInfo.append(QString(" %1").arg(row[1].trimmed()));
-        }
-        else if(row[0].trimmed() == "Road Features")
-        {
-            if(eventInfo.isEmpty())
-                eventInfo = row[1].trimmed();
-            else
-                eventInfo.append(QString(" %1").arg(row[1].trimmed()));
-        }
-    }
-
-
-
-    if(mission.weather.isEmpty())
-    {
-        isWeather = true;
-    }else
-    {
-        for(const QString& s : std::as_const(mission.weather))
-        {
-            if(weatherInfo.contains(s, Qt::CaseInsensitive) || s == "any")
-            {
-                isWeather = true;
-                break;
-            }
-        }
-    }
-
-    if(mission.time.isEmpty())
-    {
-        isTime = true;
-    }else
-    {
-        for(const QString& s : std::as_const(mission.time))
-        {
-            if(timeInfo.contains(s, Qt::CaseInsensitive) || s == "any")
-            {
-                isTime = true;
-                break;
-            }
-        }
-    }
-
-    if(mission.roadEnv.isEmpty())
-    {
-        isRoad = true;
-    }else
-    {
-        for(const QString& s : std::as_const(mission.roadEnv))
-        {
-            if(roadInfo.contains(s, Qt::CaseInsensitive) || s == "any")
-            {
-                isRoad = true;
-                break;
-            }
-        }
-    }
-
-    if(mission.scenario.isEmpty())
-    {
-        isEvent = true;
-    }else
-    {
-
-        for(const QString& s : std::as_const(mission.scenario))
-        {
-            if(eventInfo.contains(s, Qt::CaseInsensitive) || s == "any")
-            {
-                isEvent = true;
-                break;
-            }
-        }
-    }
-
-    isSave = isWeather && isTime && isRoad && isEvent;
-
-    qDebug() << "[mission]";
-    qDebug() << "weather: " << mission.weather;
-    qDebug() << "time: " << mission.time;
-    qDebug() << "road: " << mission.roadEnv;
-    qDebug() << "event: " << mission.scenario;
-
-    Writter::info(QString("weather: %1").arg(weatherInfo));
-    Writter::info(QString("time: %1").arg(timeInfo));
-    Writter::info(QString("road: %1").arg(roadInfo));
-    Writter::info(QString("event: %1").arg(eventInfo));
-
-    Writter::info(QString("weather: %1, time: %2, road: %3, evnet: %4")
-                  .arg(isWeather).arg(isTime).arg(isRoad).arg(isEvent));
-    return isSave;
+    return true;
 }
 
-void WorkManager::processSensor(const QString& camId, const QString& rootPath, QStringList text)
+void WorkManager::processSensor(const QString& camId, QStringList text)
 {
+    if(stopping)
+    {
+        return;
+    }
     bool isSave = decideToSave(text);
-    QString path = savePath + rootPath;
+
+    if(mission.saveFolders.isEmpty())
+        return;
+    QString path = savePath + mission.saveFolders.first();
     Writter::info(QString("Request process file to %1").arg(path));
     camWorkers[camId]->processClip(isSave, path);
 
