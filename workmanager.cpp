@@ -21,7 +21,7 @@ struct ProcessCleanup
 }
 
 
-WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(parent)
+WorkManager::WorkManager(QObject* parent) : QObject(parent)
 {
     manager = new QNetworkAccessManager(this);
     healthyTimer = new QTimer(this);
@@ -54,11 +54,6 @@ WorkManager::WorkManager(QVector<QString> cams, QObject* parent) : QObject(paren
     width = config.width;
     height = config.height;
 
-    for(QString name : cams)
-    {
-        camWorkers[name] = std::make_shared<CamWorker>(name, this);
-
-    }
     // 2분에 한번씩 hearbeat 호출
     connect(healthyTimer, &QTimer::timeout, apiController, &APIController::heartbeat);
 
@@ -222,9 +217,10 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
 
                 Writter::info(QString("[%1]").arg(camId));
                 qDebug().noquote() << reasoning;
-                qDebug() << "";
 
-                // 현재 배치를 먼저 저장/폐기한 뒤 다음 배치를 시작한다.
+                QFile::remove(videoPath);
+
+                // 현재 배치를 먼저 저장/삭제한 뒤 다음 배치를 시작한다.
                 emit requestToProcessSensor(camId, reasoning.split("\n\n"));
 
                 if(!stopping && requestMissionId == mission.id)
@@ -233,6 +229,7 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
             else
             {
                 Writter::error(QString("[%1] VLM response has no choices").arg(camId));
+                QFile::remove(videoPath);
                 const auto worker = camWorkers.value(camId);
                 if(worker)
                     worker->cancelCurrentBatch();
@@ -243,6 +240,7 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
             Writter::error(QString("[%1] Fail to VLM infer: %2")
                            .arg(camId, reply->errorString()));
             const auto worker = camWorkers.value(camId);
+            QFile::remove(videoPath);
             if(worker)
                 worker->cancelCurrentBatch();
         }
@@ -295,26 +293,25 @@ void WorkManager::onFileSystemChanged(const QString& path)
             if(!watcher.directories().contains(f))
             {
                 for(const QString& camId : config.camList)
-                    watcher.addPath(f + "/" + camId);
-            }
-        }
-
-    }else if(baseName.startsWith("Sensor_Data"))
-    {
-        QFileInfoList camDirs = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
-
-
-        for(const QFileInfo& fi : std::as_const(camDirs))
-        {
-            if(fi.baseName().startsWith("cam"))
-            {
-                if(!watcher.directories().contains(fi.absoluteFilePath()))
-                    watcher.addPath(fi.absoluteFilePath());
+                {
+                    const QString cameraPath = QDir(f).filePath(camId);
+                    if(QFileInfo(cameraPath).isDir()
+                            && !watcher.directories().contains(cameraPath))
+                    {
+                        watcher.addPath(cameraPath);
+                    }
+                }
             }
         }
 
     }else if(baseName.startsWith("cam") && baseName.length() == 4)
     {
+        const auto worker = camWorkers.value(baseName);
+        if(!worker)
+        {
+            Writter::warn(QString("Ignore unconfigured camera: %1").arg(baseName));
+            return;
+        }
 
         QFileInfoList fiList = dir.entryInfoList({"*raw"}, QDir::Files | QDir::NoDotAndDotDot);
 
@@ -327,17 +324,17 @@ void WorkManager::onFileSystemChanged(const QString& path)
         const QFileInfo latestFile = fiList.constLast();
         const QString rawPath = latestFile.absoluteFilePath();
 
-        if(!camWorkers[baseName]->getStatus())
+        if(!worker->getStatus())
         {
-            camWorkers[baseName]->addRawFile(rawPath);
+            worker->addRawFile(rawPath);
 //            Writter::info(QString("Insert %1 in %2").arg(rawPath, baseName));
 
-            if(camWorkers[baseName]->rawFileSize() >= videoLength)
+            if(worker->rawFileSize() >= videoLength)
             {
-                if(!camWorkers[baseName]->getStatus())
+                if(!worker->getStatus())
                 {
-                    camWorkers[baseName]->setStatus(true);
-                    createVideo(baseName, camWorkers[baseName]->getRawFiles(videoLength));
+                    worker->setStatus(true);
+                    createVideo(baseName, worker->getRawFiles(videoLength));
                 }
             }
         }
@@ -349,8 +346,8 @@ void WorkManager::startLiveMode()
 {
     Writter::info("Start to live mode");
 
-
-    for(const QString& camId : config.camList)
+    QList<QString> cameraList = config.camList;
+    for(const QString& camId : cameraList)
     {
         camWorkers[camId] = std::make_shared<CamWorker>(camId, this);
     }
@@ -369,13 +366,20 @@ void WorkManager::startLiveMode()
 
     const QFileInfo lastSensorFi = fiList.constLast();
     QString lastSensorDirPath = lastSensorFi.absoluteFilePath();
-    QDir lastSensorDir(lastSensorDirPath);
 
-    QStringList subList = lastSensorDir.entryList({"cam*"}, QDir::Dirs | QDir::NoDotAndDotDot);
-    for(const QString& sub : subList)
+    for(const QString& camId : config.camList)
     {
-        QString currentSensorCamDir = lastSensorDirPath + "/" + sub;
-        watcher.addPath(currentSensorCamDir);
+        const QString currentSensorCamDir = QDir(lastSensorDirPath).filePath(camId);
+
+        if(!QFileInfo(currentSensorCamDir).isDir())
+        {
+            Writter::warn(QString("Camera directory does not exist: %1")
+                          .arg(currentSensorCamDir));
+            continue;
+        }
+
+        if(!watcher.directories().contains(currentSensorCamDir))
+            watcher.addPath(currentSensorCamDir);
     }
 }
 
@@ -439,7 +443,8 @@ QString WorkManager::createPrompt()
     QStringList eventPrompts;
     QStringList outputEventName;
 
-    for(const QString &key : mission.scenario)
+    QList<QString> scenarioList = mission.scenario;
+    for(const QString &key : scenarioList)
     {
         if(events.contains("any"))
             return "";
@@ -672,7 +677,22 @@ void WorkManager::nextClip(const QString& camId)
 }
 bool WorkManager::decideToSave(QStringList answers)
 {
-    return true;
+    bool result = false;
+    for(const QString& event : answers)
+    {
+        QStringList rows = event.split('\n');
+
+        for(const QString& row : rows)
+        {
+            if(row.startsWith("Result"))
+            {
+                if(row.contains("Yes", Qt::CaseInsensitive))
+                    result |= true;
+            }
+        }
+    }
+
+    return result;
 }
 
 void WorkManager::processSensor(const QString& camId, QStringList text)
@@ -693,11 +713,8 @@ void WorkManager::processSensor(const QString& camId, QStringList text)
     }
 
     QString path;
-    if(isSave)
-    {
-        path = savePath + mission.saveFolders.first();
-        Writter::info(QString("Request process file to %1").arg(path));
-    }
+    path = savePath + mission.saveFolders.first();
+    Writter::info(QString("Request process file to %1").arg(path));
 
     const auto worker = camWorkers.value(camId);
     if(!worker)

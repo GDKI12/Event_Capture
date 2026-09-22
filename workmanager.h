@@ -22,7 +22,7 @@ class WorkManager : public QObject
 {
     Q_OBJECT
 public:
-    explicit WorkManager(QVector<QString> cams, QObject* parent = nullptr);
+    explicit WorkManager(QObject* parent = nullptr);
     ~WorkManager();
     void stop();
 
