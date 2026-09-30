@@ -78,8 +78,6 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
 
     // cosmos-reason2 추론 종료 다음 동영상요청
     connect(this, &WorkManager::finishInfer, this, &WorkManager::nextClip);
-
-    isVLMAlive();
 }
 
 WorkManager::~WorkManager()
@@ -87,28 +85,31 @@ WorkManager::~WorkManager()
     stop();
 }
 
-bool WorkManager::isVLMAlive()
+void WorkManager::isVLMAlive(const QString& camId, const QVector<QString>& clips)
 {
-    bool isAlive = false;
-
+    const QString requestMissionId = mission.id;
     QNetworkRequest request(QUrl("http://127.0.0.1:8000/health"));
     QNetworkReply* reply = manager->get(request);
 
-    connect(reply, &QNetworkReply::finished, [reply](){
-        if(reply->error() == QNetworkReply::NoError)
-        {
-            int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-
-            qDebug() << "status: " << statusCode;
-        }
-        else{
-            Writter::warn("Cosmos-reason2 is not alive");
-        }
-
+    // Qt의 연결 오류 처리가 끝난 뒤 stop()/abort()를 실행한다.
+    connect(reply, &QNetworkReply::finished, this, [reply, this, requestMissionId, camId, clips](){
         reply->deleteLater();
-    });
+        if(stopping || requestMissionId != mission.id)
+            return;
 
-    return isAlive;
+        const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        Writter::info(QString("VLM health status: %1 error: %2").arg(statusCode).arg(reply->error()));
+
+        if(statusCode != 200 || reply->error() != QNetworkReply::NoError)
+        {
+            Writter::error("Cosmos-reason2 is not alive");
+            stop();
+            return;
+        }
+
+        encodeVideo(camId, clips);
+    }, Qt::QueuedConnection);
+
 }
 
 void WorkManager::infer(const QString& camId, const QString& videoPath)
@@ -414,8 +415,6 @@ void WorkManager::startFileMode()
         camWorkers[camId] = std::make_shared<CamWorker>(camId, this);
         camWorkers[camId]->setSensorDirs(sensorDirs);
         camWorkers[camId]->changeDir();
-//        connect(camWorkers[camId].get(), &CamWorker::requestCreateClip, this, &WorkManager::createVideo);
-
 
         createVideo(camId, camWorkers[camId]->getRawFiles(videoLength));
     }
@@ -492,8 +491,18 @@ void WorkManager::stop()
 
 void WorkManager::createVideo(const QString& camId, const QVector<QString>& clips)
 {
+    if(stopping || mission.id.isEmpty() || clips.isEmpty())
+        return;
+
+    isVLMAlive(camId, clips);
+}
+
+void WorkManager::encodeVideo(const QString& camId, const QVector<QString>& clips)
+{
     if(stopping || clips.isEmpty())
         return;
+
+    Writter::info(QString("[%1] Start video creation: %2 raw frames").arg(camId).arg(clips.size()));
 
     const qint64 rawBytes = qint64(width) * height;
     if(width <= 0 || height <= 0 || rawBytes > std::numeric_limits<int>::max())
@@ -675,9 +684,11 @@ void WorkManager::nextClip(const QString& camId)
         worker->setStatus(false);
     }
 }
+
 bool WorkManager::decideToSave(QStringList answers)
 {
     bool result = false;
+
     for(const QString& event : answers)
     {
         QStringList rows = event.split('\n');
@@ -779,7 +790,8 @@ void WorkManager::cancelPendingInferences()
 
     for(QNetworkReply* reply : replies)
     {
-        if(reply && reply->isRunning())
+        // 이미 오류가 보고된 요청은 Qt가 종료하도록 둔다.
+        if(reply && reply->isRunning() && reply->error() == QNetworkReply::NoError)
             reply->abort();
     }
 }

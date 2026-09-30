@@ -59,11 +59,11 @@ public:
       QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss.zzz");
 
       if(level == LogLevel::INFO)
-          qDebug().noquote() << timestamp << "[INFO] " << content;
+          qDebug().noquote().nospace() << timestamp << "[INFO] " << content;
       else if(level == LogLevel::WARN)
-          qWarning().noquote() << "\033[33m" << timestamp << "[WARN] " << content;
+          qWarning().noquote().nospace() << "\033[33m" << timestamp << "[WARN] " << content;
       else if(level == LogLevel::ERROR)
-          qCritical().noquote() << "\033[31m" << timestamp << "[ERROR] " << content;
+          qCritical().noquote().nospace() << "\033[31m" << timestamp << "[ERROR] " << content;
   }
 
   static void info(const QString& content)

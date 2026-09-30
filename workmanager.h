@@ -33,7 +33,8 @@ private:
     QString createPrompt();
     void createVideo(const QString& camId, const QVector<QString>& clips);
     void createVideo(const QString& camId, std::function<QVector<QString>(int)>);
-    bool isVLMAlive();
+    void isVLMAlive(const QString& camId, const QVector<QString>& clips);
+    void encodeVideo(const QString& camId, const QVector<QString>& clips);
     void infer(const QString& camId, const QString& videoPath);
     void nextClip(const QString& camId);
     void cancelPendingInferences();
