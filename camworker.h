@@ -25,6 +25,7 @@ public:
 
     void setRawFiles(const QString& dirPath);
     void addRawFile(const QString&);
+    QVector<QString> discoverRawFiles(const QFileInfoList& files);
 
     bool sensorDirIsEmpty();
     QString getCamId();
@@ -35,7 +36,7 @@ public:
     void cancelCurrentBatch();
 
 public slots:
-    void processClip(bool isSave, QString rootPath);
+    bool processClip(bool isSave, QString rootPath);
     void changeDir();
 
 
@@ -48,6 +49,7 @@ private:
     QQueue<QString> sensorDirs;
     QQueue<QString> rawFiles;
     QVector<QString> trashList;
+    QSet<QString> knownRawFiles;
 
     bool inferStatus;
 };

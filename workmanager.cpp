@@ -272,6 +272,9 @@ void WorkManager::init(const Mission& mission)
 
 void WorkManager::onFileSystemChanged(const QString& path)
 {
+    if(stopping || mission.id.isEmpty())
+        return;
+
     QFileInfo info(path);
 
     QString baseName = info.baseName();
@@ -316,28 +319,22 @@ void WorkManager::onFileSystemChanged(const QString& path)
 
         QFileInfoList fiList = dir.entryInfoList({"*raw"}, QDir::Files | QDir::NoDotAndDotDot);
 
-        if(fiList.isEmpty())
+        const QVector<QString> newFiles = worker->discoverRawFiles(fiList);
+        for(const QString& rawPath : newFiles)
         {
-            Writter::info("No raw file");
-            return;
-        }
-
-        const QFileInfo latestFile = fiList.constLast();
-        const QString rawPath = latestFile.absoluteFilePath();
-
-        if(!worker->getStatus())
-        {
-            worker->addRawFile(rawPath);
-//            Writter::info(QString("Insert %1 in %2").arg(rawPath, baseName));
-
-            if(worker->rawFileSize() >= videoLength)
+            if(worker->getStatus())
             {
-                if(!worker->getStatus())
-                {
-                    worker->setStatus(true);
-                    createVideo(baseName, worker->getRawFiles(videoLength));
-                }
+                // 추론 중 새로 들어온 파일만 삭제한다. 현재 배치 원본은 보호한다.
+                if(!QFile::remove(rawPath))
+                    Writter::warn(QString("Failed to remove incoming raw file: %1").arg(rawPath));
             }
+            else
+                worker->addRawFile(rawPath);
+        }
+        if(!worker->getStatus() && videoLength > 0 && worker->rawFileSize() >= videoLength)
+        {
+            worker->setStatus(true);
+            createVideo(baseName, worker->getRawFiles(videoLength));
         }
     }
 
@@ -360,10 +357,7 @@ void WorkManager::startLiveMode()
                                              QDir::Name);
 
     if(fiList.isEmpty())
-    {
-        Writter::warn("No Working capture program, check it!!");
         return;
-    }
 
     const QFileInfo lastSensorFi = fiList.constLast();
     QString lastSensorDirPath = lastSensorFi.absoluteFilePath();
@@ -635,7 +629,12 @@ void WorkManager::encodeVideo(const QString& camId, const QVector<QString>& clip
     else
     {
         QString path = savePath + "";
-        camWorkers[camId]->processClip(true, path);
+        if(!camWorkers[camId]->processClip(true, path))
+        {
+            Writter::error(QString("[%1] Save failed; stop mission processing: %2")
+                           .arg(camId, mission.id));
+            stop();
+        }
     }
 
 }
@@ -724,14 +723,23 @@ void WorkManager::processSensor(const QString& camId, QStringList text)
     }
 
     QString path;
-    path = savePath + mission.saveFolders.first();
-    Writter::info(QString("Request process file to %1").arg(path));
+    if(isSave)
+    {
+        path = savePath + mission.saveFolders.first();
+        Writter::info(QString("Request process file to %1").arg(path));
+    }
 
     const auto worker = camWorkers.value(camId);
     if(!worker)
         return;
 
-    worker->processClip(isSave, path);
+    if(!worker->processClip(isSave, path))
+    {
+        Writter::error(QString("[%1] Save failed; scene is not counted. Stop mission processing: %2")
+                       .arg(camId, mission.id));
+        stop();
+        return;
+    }
 
     if(isSave)
     {

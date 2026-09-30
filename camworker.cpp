@@ -67,7 +67,25 @@ QVector<QString> CamWorker::getRawFiles(int videoL)
 void CamWorker::addRawFile(const QString& rawFile)
 {
 //    Writter::info(QString("Insert %1 to queue of %2  %3").arg(rawFile, camId, QString::number(rawFileSize())));
-    rawFiles.enqueue(rawFile);
+    if(!rawFiles.contains(rawFile) && !trashList.contains(rawFile))
+        rawFiles.enqueue(rawFile);
+}
+
+QVector<QString> CamWorker::discoverRawFiles(const QFileInfoList& files)
+{
+    QSet<QString> currentFiles;
+    QVector<QString> newFiles;
+    for(const QFileInfo& file : files)
+    {
+        const QString path = file.absoluteFilePath();
+        currentFiles.insert(path);
+        if(!knownRawFiles.contains(path)
+                && !rawFiles.contains(path) && !trashList.contains(path))
+            newFiles.append(path);
+    }
+    // 삭제 이벤트에서는 남아 있는 원본을 새 파일로 다시 처리하지 않는다.
+    knownRawFiles = currentFiles;
+    return newFiles;
 }
 
 // 파일모드시 처리할 디렉토리들저장
@@ -99,25 +117,45 @@ int CamWorker::rawFileSize(){ return rawFiles.size(); }
 QString CamWorker::getCamId(){return camId;}
 
 bool CamWorker::sensorDirIsEmpty(){ return sensorDirs.isEmpty(); }
-void CamWorker::processClip(bool isSave, QString rootPath)
+bool CamWorker::processClip(bool isSave, QString rootPath)
 {
-    QDir().mkpath(rootPath);
-
     if(isSave)
     {
+        if(trashList.isEmpty())
+        {
+            Writter::error(QString("[%1] Save failed: empty batch").arg(camId));
+            return false;
+        }
+        if(!QDir().mkpath(rootPath))
+        {
+            Writter::error(QString("[%1] Save failed: cannot create %2").arg(camId, rootPath));
+            return false;
+        }
+
+        // 전체 복사가 성공하기 전에는 원본을 삭제하지 않는다.
+        QStringList copiedFiles;
         for(const QString& filePath : std::as_const(trashList))
         {
-            QString filename = filePath.split('/').last();
-            QString dstPath = rootPath + "/" + filename;
-
-            if(QFile::exists(filePath))
+            const QString dstPath = QDir(rootPath).filePath(QFileInfo(filePath).fileName());
+            QFile source(filePath);
+            if(!source.copy(dstPath))
             {
-//                if(!QFile::copy(filePath, dstPath))
-                if(!QFile::rename(filePath, dstPath))
-                    Writter::error(QString("Fail to move %1 to %2").arg(filePath, dstPath));
+                Writter::error(QString("[%1] Save failed: %2 -> %3: %4 (%5/%6 copied)")
+                              .arg(camId, filePath, dstPath, source.errorString())
+                              .arg(copiedFiles.size()).arg(trashList.size()));
+                for(const QString& copied : std::as_const(copiedFiles))
+                    if(!QFile::remove(copied))
+                        Writter::error(QString("Failed to roll back saved file: %1").arg(copied));
+                return false;
             }
+            copiedFiles.append(dstPath);
         }
-        Writter::info("Success to save file");
+        for(const QString& filePath : std::as_const(trashList))
+            if(!QFile::remove(filePath))
+                Writter::warn(QString("Saved but failed to remove source: %1").arg(filePath));
+
+        Writter::info(QString("[%1] Saved %2/%2 raw files to %3")
+                      .arg(camId).arg(trashList.size()).arg(rootPath));
     }else
     {
         for(const QString& filePath : std::as_const(trashList))
@@ -133,6 +171,7 @@ void CamWorker::processClip(bool isSave, QString rootPath)
     }
 
     trashList.clear();
+    return true;
 }
 
 void CamWorker::changeDir()
