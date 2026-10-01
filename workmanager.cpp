@@ -437,10 +437,16 @@ QString WorkManager::createPrompt()
     QStringList outputEventName;
 
     QList<QString> scenarioList = mission.scenario;
+
+    if(scenarioList.isEmpty())
+    {
+        return root.value("no_event_prompt").toString();
+    }
+
     for(const QString &key : scenarioList)
     {
         if(events.contains("any"))
-            return "";
+            return root.value("no_event_prompt").toString();;
 
         if(!events.contains(key))
             continue;
@@ -694,6 +700,42 @@ bool WorkManager::decideToSave(QStringList answers)
 
         for(const QString& row : rows)
         {
+            if(row.contains(":"))
+            {
+                int pos = row.indexOf(':');
+                QString value = row.mid(pos+1).trimmed();
+
+                if(row.startsWith("Time"))
+                {
+                    for(const QString& time : mission.time)
+                    {
+                        if(time == "any" || time == value)
+                        {
+                            result = true;
+                            break;
+                        }else
+                        {
+                            result = false;
+                        }
+                    }
+                }
+
+                if(row.startsWith("Weather"))
+                {
+                    for(const QString& weather : mission.weather)
+                    {
+                        if(weather == "any" || weather == value)
+                        {
+                            result = true;
+                            break;
+                        }else
+                        {
+                            result = false;
+                        }
+                    }
+                }
+            }
+
             if(row.startsWith("Result"))
             {
                 if(row.contains("Yes", Qt::CaseInsensitive))
