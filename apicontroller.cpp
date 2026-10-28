@@ -17,11 +17,13 @@ APIController::APIController(const QString& baseURL, const QString& id
     this->baseURL = baseURL;
     missionRequestURL = baseURL + "/api/devices/missions/pull";
     heartbeatURL = baseURL + "/api/devices/heartbeat";
+    commonPromptURL = baseURL + "/api/devices/common-codes/requirements";
 
     connect(networkManager, &QNetworkAccessManager::finished,
             this, &APIController::onAPIFinished);
 
     heartbeat();
+    pullPrompt();
 }
 
 void APIController::pullingMission()
@@ -65,6 +67,21 @@ void APIController::heartbeat()
     reply->setProperty("apiType", "heartbeat");
 
     Writter::info("Request heartbeat");
+}
+
+void APIController::pullPrompt()
+{
+    QUrl url(commonPromptURL);
+
+    QNetworkRequest request(url);
+
+    request.setRawHeader("X-Device-Id", authId.toUtf8());
+    request.setRawHeader("X-Device-Auth-Key", secretKey.toUtf8());
+
+    QNetworkReply* reply = networkManager->get(request);
+    reply->setProperty("apiType", "prompt");
+
+    Writter::info("Request commont prompts");
 }
 
 void APIController::processStatus(const QString& id, double rate)
@@ -198,8 +215,35 @@ void APIController::onAPIFinished(QNetworkReply *reply)
                 start = true;
                 pullingMission();
             }
-        }else if(apiType == "camWorkers[camId] = std::make_shared<CamWorker>(camId, this);")
+        }else if(apiType == "prompt")
         {
+            QMap<QString, QString> promptMap;
+
+            QByteArray response = reply->readAll();
+            QJsonParseError error;
+            QJsonDocument doc = QJsonDocument::fromJson(response, &error);
+
+            if(error.error != QJsonParseError::NoError)
+                Writter::error("Pulling prompt parsing error: " + error.errorString());
+
+            QJsonObject root = doc.object();
+            QJsonArray groupsArr = root["groups"].toArray();
+            QJsonArray scenarioArr;
+
+            for(const QJsonValue& value : groupsArr)
+            {
+                if(value["code"].toString() == "scenario")
+                    scenarioArr = value["items"].toArray();
+            }
+
+            for(const QJsonValue& value : scenarioArr)
+            {
+                QJsonObject obj = value.toObject();
+                promptMap[obj["code"].toString()] = obj["collectionPrompt"].toString();
+            }
+
+            emit getPrompts(promptMap);
+
 
         }else if(apiType == "collected")
         {

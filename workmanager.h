@@ -52,6 +52,7 @@ public slots:
     void startLiveMode();
     void init(const Mission& mission);
     void onFileSystemChanged(const QString& path);
+    void initPrompts(const QMap<QString,QString>& pMap);
 
 
 
@@ -71,7 +72,7 @@ private:
     QString workingDir;
 
     QMap<QString, VssInfo> vssInfos;
-
+    QMap<QString, QString> prompts;
     Mission mission;
     QTimer* healthyTimer;
     QTimer* missionTimer;

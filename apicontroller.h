@@ -21,8 +21,10 @@ public slots:
     void processStatus(const QString& id, double rate);
     void finishMission(const QString& id);
     void onAPIFinished(QNetworkReply *reply);
+    void pullPrompt();
 signals:
     void getMission(const Mission& mission);
+    void getPrompts(const QMap<QString, QString>& prompts);
     void stopPullingMission();
 private:
     bool start;
@@ -31,6 +33,7 @@ private:
     QString baseURL;
     QString missionRequestURL;
     QString heartbeatURL;
+    QString commonPromptURL;
     QString collectedURL;
 
     QString authId;

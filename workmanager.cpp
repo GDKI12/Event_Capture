@@ -68,6 +68,10 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
     });
 
     connect(apiController, &APIController::getMission, this, &WorkManager::init);
+
+    // 프롬프트들 초기화
+    connect(apiController, &APIController::getPrompts, this, &WorkManager::initPrompts);
+
     connect(&watcher, &QFileSystemWatcher::directoryChanged, this, &WorkManager::onFileSystemChanged);
 
     // summarize된 결과로 해당 파일들을 어떠게 할건지 처리
@@ -83,6 +87,12 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
 WorkManager::~WorkManager()
 {
     stop();
+}
+
+void WorkManager::initPrompts(const QMap<QString,QString>& pMap)
+{
+    for(auto itr = pMap.cbegin(); itr != pMap.cend(); itr++)
+        prompts[itr.key()] = itr.value();
 }
 
 void WorkManager::isVLMAlive(const QString& camId, const QVector<QString>& clips)
@@ -260,6 +270,8 @@ void WorkManager::init(const Mission& mission)
     prompt.clear();
 
     prompt = createPrompt();
+    qDebug() << "[prompt]";
+    qDebug() << prompt;
     Writter::info("Success to initialize");
 
     stopping = false;
@@ -430,7 +442,6 @@ QString WorkManager::createPrompt()
     QJsonDocument doc = QJsonDocument::fromJson(data);
     QJsonObject root = doc.object();
 
-    QJsonObject events = root["events"].toObject();
     QJsonObject composition = root["composition"].toObject();
 
     QStringList eventPrompts;
@@ -438,28 +449,21 @@ QString WorkManager::createPrompt()
 
     QList<QString> scenarioList = mission.scenario;
 
-    if(scenarioList.isEmpty())
-    {
-        return root.value("no_event_prompt").toString();
-    }
-
     for(const QString &key : scenarioList)
     {
-        if(events.contains("any"))
-            return root.value("no_event_prompt").toString();;
-
-        if(!events.contains(key))
+        if(key == "any" || !prompts.contains(key))
             continue;
 
-        QJsonObject event = events[key].toObject();
-        eventPrompts.append(event["prompt"].toString());
-        outputEventName.append(event["output_event"].toString());
-
+        eventPrompts.append(prompts[key]);
+        outputEventName.append(key);
     }
 
     QString header = composition["selected_event_header_template"].toString();
+
     header.replace("{{SELECTED_EVENT_NAMES}}",
-                   outputEventName.join(composition["selected_event_names_separator"].toString()));
+                   outputEventName.isEmpty()
+                   ? QStringLiteral("none")
+                   : outputEventName.join(composition["selected_event_names_separator"].toString()));
 
     QString finalPrompt = QStringList{
             root["common_prompt"].toString(),
@@ -692,7 +696,7 @@ void WorkManager::nextClip(const QString& camId)
 
 bool WorkManager::decideToSave(QStringList answers)
 {
-    bool result = false;
+    bool result = true;
 
     for(const QString& event : answers)
     {
@@ -711,11 +715,11 @@ bool WorkManager::decideToSave(QStringList answers)
                     {
                         if(time == "any" || time == value)
                         {
-                            result = true;
+                            result = result && true;
                             break;
                         }else
                         {
-                            result = false;
+                            result = result && false;
                         }
                     }
                 }
@@ -726,11 +730,11 @@ bool WorkManager::decideToSave(QStringList answers)
                     {
                         if(weather == "any" || weather == value)
                         {
-                            result = true;
+                            result = result && true;
                             break;
                         }else
                         {
-                            result = false;
+                            result = result && false;
                         }
                     }
                 }
@@ -754,6 +758,9 @@ void WorkManager::processSensor(const QString& camId, QStringList text)
         return;
     }
     bool isSave = decideToSave(text);
+
+    QString saveResult = isSave ? "true" : "false";
+    Writter::info("decideToSave() result is " + saveResult);
 
     if(isSave && mission.saveFolders.isEmpty())
     {

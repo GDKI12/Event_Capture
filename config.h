@@ -28,8 +28,8 @@ public:
         try
         {
             QFile file(DEFAULT_PATH);
-            if(file.exists())
-                qDebug() <<"";
+//            if(file.exists())
+//                qDebug() <<"";
             auto data = toml::parse(DEFAULT_PATH.toStdString());
 
             std::string cRootPath;
