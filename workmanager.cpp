@@ -333,16 +333,7 @@ void WorkManager::onFileSystemChanged(const QString& path)
 
         const QVector<QString> newFiles = worker->discoverRawFiles(fiList);
         for(const QString& rawPath : newFiles)
-        {
-            if(worker->getStatus())
-            {
-                // 추론 중 새로 들어온 파일만 삭제한다. 현재 배치 원본은 보호한다.
-                if(!QFile::remove(rawPath))
-                    Writter::warn(QString("Failed to remove incoming raw file: %1").arg(rawPath));
-            }
-            else
-                worker->addRawFile(rawPath);
-        }
+            worker->addRawFile(rawPath);
         if(!worker->getStatus() && videoLength > 0 && worker->rawFileSize() >= videoLength)
         {
             worker->setStatus(true);
@@ -691,6 +682,12 @@ void WorkManager::nextClip(const QString& camId)
 
     }else{
         worker->setStatus(false);
+        // 추론 중 쌓인 파일이 충분하면 새 파일 이벤트 없이 다음 배치를 시작한다.
+        if(worker->rawFileSize() >= videoLength)
+        {
+            worker->setStatus(true);
+            createVideo(camId, worker->getRawFiles(videoLength));
+        }
     }
 }
 
