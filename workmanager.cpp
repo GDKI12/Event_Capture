@@ -337,7 +337,10 @@ void WorkManager::onFileSystemChanged(const QString& path)
         if(!worker->getStatus() && videoLength > 0 && worker->rawFileSize() >= videoLength)
         {
             worker->setStatus(true);
-            createVideo(baseName, worker->getRawFiles(videoLength));
+            QVector<QString> camRawFiles = worker->getRawFiles(videoLength);
+
+            if(!camRawFiles.isEmpty())
+                createVideo(baseName, camRawFiles);
         }
     }
 
@@ -411,9 +414,11 @@ void WorkManager::startFileMode()
         camIds.append(camId);
         camWorkers[camId] = std::make_shared<CamWorker>(camId, this);
         camWorkers[camId]->setSensorDirs(sensorDirs);
-        camWorkers[camId]->changeDir();
 
-        createVideo(camId, camWorkers[camId]->getRawFiles(videoLength));
+        QVector<QString> rawList = camWorkers[camId]->getRawFiles(videoLength);
+
+        if(!rawList.isEmpty())
+            createVideo(camId, rawList);
     }
 
 
@@ -486,7 +491,7 @@ void WorkManager::stop()
 
 void WorkManager::createVideo(const QString& camId, const QVector<QString>& clips)
 {
-    if(stopping || mission.id.isEmpty() || clips.isEmpty())
+    if(stopping || mission.id.isEmpty() || clips.isEmpty() || clips.length() < videoLength)
         return;
 
     isVLMAlive(camId, clips);
@@ -656,39 +661,22 @@ void WorkManager::nextClip(const QString& camId)
     if(!worker)
         return;
 
-    if(!mode)
+    worker->setStatus(false);
+    // 라이브 모드는 다음 파일 이벤트를 기다리고, 파일 모드는 getRawFiles에서
+    // 다음 센서 디렉토리까지 읽어 필요한 프레임을 채운다.
+    if(mode && worker->rawFileSize() < videoLength)
+        return;
+
+    const QVector<QString> rawList = worker->getRawFiles(videoLength);
+    if(rawList.isEmpty())
     {
-        if((worker->rawFileSize() < videoLength)
-                || ((worker->rawFileSize() < videoLength) && worker->sensorDirIsEmpty()) )
-        {
-            if(worker->rawFileSize() < videoLength && !mode)
-            {
-                // 여기서 index 에러발생
-                if(!worker->sensorDirIsEmpty())
-                {
-                    worker->changeDir();
-                    createVideo(camId, worker->getRawFiles(videoLength));
-                }
-                else
-                {
-                    Writter::info("Finish process");
-                    return;
-                }
-            }
-            return;
-        }
-
-        createVideo(camId, worker->getRawFiles(videoLength));
-
-    }else{
-        worker->setStatus(false);
-        // 추론 중 쌓인 파일이 충분하면 새 파일 이벤트 없이 다음 배치를 시작한다.
-        if(worker->rawFileSize() >= videoLength)
-        {
-            worker->setStatus(true);
-            createVideo(camId, worker->getRawFiles(videoLength));
-        }
+        if(!mode)
+            Writter::info("Finish process");
+        return;
     }
+
+    worker->setStatus(true);
+    createVideo(camId, rawList);
 }
 
 bool WorkManager::decideToSave(QStringList answers)
@@ -699,50 +687,29 @@ bool WorkManager::decideToSave(QStringList answers)
     {
         QStringList rows = event.split('\n');
 
-        for(const QString& row : rows)
+        for(const QString& value : rows)
         {
-            if(row.contains(":"))
+            int pos = value.indexOf(':');
+            QString key = value.mid(0, pos);
+            QString v = value.mid(pos+1).trimmed();
+
+            if(key == "Time")
             {
-                int pos = row.indexOf(':');
-                QString value = row.mid(pos+1).trimmed();
-
-                if(row.startsWith("Time"))
-                {
-                    for(const QString& time : mission.time)
-                    {
-                        if(time == "any" || time == value)
-                        {
-                            result = result && true;
-                            break;
-                        }else
-                        {
-                            result = result && false;
-                        }
-                    }
-                }
-
-                if(row.startsWith("Weather"))
-                {
-                    for(const QString& weather : mission.weather)
-                    {
-                        if(weather == "any" || weather == value)
-                        {
-                            result = result && true;
-                            break;
-                        }else
-                        {
-                            result = result && false;
-                        }
-                    }
-                }
+                if(mission.time.contains("any") || mission.time.contains(v))
+                    result = true;
+                else
+                    result = false;
             }
 
-            if(row.startsWith("Result"))
+            if(key == "Weather")
             {
-                if(row.contains("Yes", Qt::CaseInsensitive))
-                    result |= true;
+                if(mission.weather.contains("any") || mission.weather.contains(v))
+                    result = true;
+                else
+                    result = false;
             }
         }
+
     }
 
     return result;

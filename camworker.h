@@ -23,7 +23,6 @@ public:
     explicit CamWorker(const QString& camId, QObject* parent = nullptr);
     void setSensorDirs(const QVector<QString>& dirList);
 
-    void setRawFiles(const QString& dirPath);
     void addRawFile(const QString&);
     QVector<QString> discoverRawFiles(const QFileInfoList& files);
 
@@ -37,7 +36,6 @@ public:
 
 public slots:
     bool processClip(bool isSave, QString rootPath);
-    void changeDir();
 
 
 signals:
@@ -46,6 +44,7 @@ signals:
 
 private:
     QString camId;
+    QString curDir;
     QQueue<QString> sensorDirs;
     QQueue<QString> rawFiles;
     QVector<QString> trashList;

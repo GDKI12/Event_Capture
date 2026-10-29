@@ -199,7 +199,10 @@ void APIController::onAPIFinished(QNetworkReply *reply)
                 mission.roadEnv.append(value.toString());
 
             for(const QJsonValue& value : scenarioArr)
+            {
+//                if(value.toString())
                 mission.scenario.append(value.toString());
+            }
 
             Writter::info("Get Mission");
             emit stopPullingMission();

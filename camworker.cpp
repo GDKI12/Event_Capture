@@ -45,22 +45,56 @@ void CamWorker::cancelCurrentBatch()
 
 QVector<QString> CamWorker::getRawFiles(int videoL)
 {
-    Writter::info(QString("Process raw files of %1 %2/%3").arg(camId).arg(videoL).arg(rawFileSize()));
-
+    // 저장/삭제 전에는 다음 배치를 꺼내 현재 배치와 섞지 않는다.
+    if(!trashList.isEmpty())
+    {
+        Writter::warn(QString("Worker(%1): previous raw batch is still pending").arg(camId));
+        return {};
+    }
     QVector<QString> result;
 
-    if(videoL <= 0 || rawFiles.size() < videoL)
+    if(videoL <= 0 || (sensorDirs.isEmpty() && (rawFiles.size() <= 0)))
     {
         Writter::warn(QString("Worker(%1): insufficient raw files (%2 requested, %3 available)")
                       .arg(camId).arg(videoL).arg(rawFiles.size()));
-        return result;
+        Writter::info("There is no Data in root folder");
+        trashList.clear();
+        return {};
+        // error
+    }
+
+
+    while(!sensorDirs.isEmpty())
+    {
+        if(rawFiles.size() >= videoL)
+            break;
+        curDir = sensorDirs.dequeue();
+        QString rawDirPath = QString("%1/%2").arg(curDir, camId);
+
+        QDir rawDir(rawDirPath);
+        QFileInfoList infos = rawDir.entryInfoList({"*.raw"}, QDir::Files | QDir::NoDotAndDotDot,
+                                                   QDir::Name);
+        if(infos.isEmpty())
+            continue;
+
+        for(const QFileInfo& info : infos)
+            rawFiles.enqueue(info.absoluteFilePath());
+    }
+
+    if(sensorDirs.isEmpty() && rawFiles.size() < videoL)
+    {
+        Writter::info("Insufficient data");
+        trashList.clear();
+        return {};
     }
 
     for(int i = 0; i < videoL; i++)
-        result.push_back(rawFiles.dequeue());
+    {
+        QString rawFilePath = rawFiles.dequeue();
+        result.push_back(rawFilePath);
+    }
 
     trashList = result;
-
     return result;
 }
 
@@ -93,23 +127,6 @@ void CamWorker::setSensorDirs(const QVector<QString>& dirList)
 {
     for(const QString& dir : dirList)
         sensorDirs.enqueue(dir);
-}
-
-//
-void CamWorker::setRawFiles(const QString& dirPath)
-{
-    // delete raw files
-    rawFiles.clear();
-
-    QString rawDirPath = QString("%1/%2").arg(dirPath, camId);
-
-    QDir dir(rawDirPath);
-
-    QFileInfoList infos = dir.entryInfoList({"*.raw"}, QDir::Files | QDir::NoDotAndDotDot,
-                                            QDir::Name);
-
-    for(const QFileInfo& info : infos)
-        rawFiles.enqueue(info.absoluteFilePath());
 }
 
 int CamWorker::rawFileSize(){ return rawFiles.size(); }
@@ -172,11 +189,4 @@ bool CamWorker::processClip(bool isSave, QString rootPath)
 
     trashList.clear();
     return true;
-}
-
-void CamWorker::changeDir()
-{
-    QString workDir = sensorDirs.dequeue();
-    Writter::info("Current Working directory is " + workDir);
-    setRawFiles(workDir);
 }
