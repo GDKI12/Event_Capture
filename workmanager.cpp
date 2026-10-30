@@ -711,7 +711,10 @@ bool WorkManager::decideToSave(QStringList answers)
 
             if(key == "Result")
             {
-                qDebug() <<"";
+                if(v == "No")
+                    result = false;
+                else
+                    result = true;
             }
         }
 
