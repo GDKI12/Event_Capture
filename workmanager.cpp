@@ -69,6 +69,12 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
 
     connect(apiController, &APIController::getMission, this, &WorkManager::init);
 
+    // 미션이 성공적으로 서버에 전송되었을떄 사용
+    connect(apiController, &APIController::successToFinished, this, &WorkManager::deleteSuccessedMission);
+
+    // 미처리된 미션들 전송하기
+    connect(apiController, &APIController::hasPendingMissions, this, &WorkManager::processPendingMisions);
+
     // 프롬프트들 초기화
     connect(apiController, &APIController::getPrompts, this, &WorkManager::initPrompts);
 
@@ -82,6 +88,7 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
 
     // cosmos-reason2 추론 종료 다음 동영상요청
     connect(this, &WorkManager::finishInfer, this, &WorkManager::nextClip);
+
 }
 
 WorkManager::~WorkManager()
@@ -797,6 +804,9 @@ void WorkManager::missionFinish(const QString& id)
 
     qDebug() << "Start to pulling mission";
     missionTimer->start();
+
+    processedMissionList.insert(id);
+
     apiController->finishMission(id);
 
     mission.id.clear();
@@ -823,4 +833,20 @@ void WorkManager::cancelPendingInferences()
         if(reply && reply->isRunning() && reply->error() == QNetworkReply::NoError)
             reply->abort();
     }
+}
+
+void WorkManager::deleteSuccessedMission(const QString& id)
+{
+    if(processedMissionList.contains(id))
+    {
+        processedMissionList.remove(id);
+        Writter::info("Success to send finish API to server");
+    }
+}
+
+// 서버의 예상치 못한 종료로 인하여 미처리된 미션 재요청
+void WorkManager::processPendingMisions()
+{
+    for(auto itr = processedMissionList.cbegin(); itr != processedMissionList.cend(); itr++)
+        apiController->finishMission(*itr);
 }

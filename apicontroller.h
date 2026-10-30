@@ -26,6 +26,9 @@ signals:
     void getMission(const Mission& mission);
     void getPrompts(const QMap<QString, QString>& prompts);
     void stopPullingMission();
+    void successToFinished(const QString& id);
+    void hasPendingMissions();
+
 private:
     bool start;
     QNetworkAccessManager *networkManager;

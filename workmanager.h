@@ -53,8 +53,8 @@ public slots:
     void init(const Mission& mission);
     void onFileSystemChanged(const QString& path);
     void initPrompts(const QMap<QString,QString>& pMap);
-
-
+    void deleteSuccessedMission(const QString& id);
+    void processPendingMisions();
 
 private:
     QString prompt;
@@ -89,6 +89,8 @@ private:
 
     // 처리된 파일들 SC001_xxxx
     QQueue<QString> saveQueue;
+
+    QSet<QString> processedMissionList;
 
     bool stopping = false;
     bool restart = false;

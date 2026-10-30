@@ -136,6 +136,11 @@ void APIController::onAPIFinished(QNetworkReply *reply)
                       .arg(QString::fromUtf8(responseBody))
                       );
 
+        if(apiType == "collected")
+        {
+            const QString failedUrl = reply->url().toString();
+        }
+
         reply->deleteLater();
         return;
     }
@@ -213,6 +218,9 @@ void APIController::onAPIFinished(QNetworkReply *reply)
         {
             Writter::info("Success to heartbeat");
 
+            // 서버와 연결이 되었을때
+            emit hasPendingMissions();
+
             if(!start)
             {
                 start = true;
@@ -250,7 +258,11 @@ void APIController::onAPIFinished(QNetworkReply *reply)
 
         }else if(apiType == "collected")
         {
-            Writter::info("Finish mission successfully");
+            const QString url = reply->url().toString();
+            QStringList splitedUrl = url.split('/');
+            QString id = splitedUrl[-2];
+
+            emit successToFinished(id);
         }
     }
 
