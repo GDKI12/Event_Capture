@@ -30,6 +30,7 @@ SOURCES += \
     apicontroller.cpp \
     camworker.cpp \
     main.cpp \
+    ui.cpp \
     vsslogger.cpp \
     workmanager.cpp
 
@@ -38,6 +39,7 @@ HEADERS += \
     camworker.h \
     config.h \
     define.h \
+    ui.h \
     vsslogger.h \
     workmanager.h
 
