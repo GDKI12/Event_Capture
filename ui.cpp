@@ -10,3 +10,5 @@ UI::UI(QWidget* parent) : QMainWindow(parent)
 
     resize(1280, 720);
 }
+
+UI::~UI(){}
