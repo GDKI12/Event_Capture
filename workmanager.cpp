@@ -708,6 +708,11 @@ bool WorkManager::decideToSave(QStringList answers)
                 else
                     result = false;
             }
+
+            if(key == "Result")
+            {
+                qDebug() <<"";
+            }
         }
 
     }
