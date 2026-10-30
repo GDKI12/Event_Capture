@@ -847,6 +847,9 @@ void WorkManager::deleteSuccessedMission(const QString& id)
 // 서버의 예상치 못한 종료로 인하여 미처리된 미션 재요청
 void WorkManager::processPendingMisions()
 {
-    for(auto itr = processedMissionList.cbegin(); itr != processedMissionList.cend(); itr++)
-        apiController->finishMission(*itr);
+    if(!processedMissionList.isEmpty())
+    {
+        for(auto itr = processedMissionList.cbegin(); itr != processedMissionList.cend(); itr++)
+            apiController->finishMission(*itr);
+    }
 }

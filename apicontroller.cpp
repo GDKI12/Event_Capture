@@ -260,7 +260,7 @@ void APIController::onAPIFinished(QNetworkReply *reply)
         {
             const QString url = reply->url().toString();
             QStringList splitedUrl = url.split('/');
-            QString id = splitedUrl[-2];
+            QString id = splitedUrl[splitedUrl.size() - 2];
 
             emit successToFinished(id);
         }
