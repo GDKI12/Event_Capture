@@ -69,7 +69,7 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
 
     // 빈 폴더들 정리
     connect(cleanerTimer, &QTimer::timeout, [&](){
-
+        folderCleaner.deleteEmptyFolder(rootPath);
     });
 
     // 풀링 완료시 타이머 stop
