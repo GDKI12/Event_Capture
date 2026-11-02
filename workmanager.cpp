@@ -35,7 +35,7 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
     missionTimer->setInterval(60000);
     missionTimer->setTimerType(Qt::PreciseTimer);
 
-    cleanerTimer->setInterval();
+    cleanerTimer->setInterval(10000);
     cleanerTimer ->setTimerType(Qt::PreciseTimer);
 
     healthyTimer->start();
