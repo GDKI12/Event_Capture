@@ -29,6 +29,7 @@ LIBS += -lopencv_core \
 SOURCES += \
     apicontroller.cpp \
     camworker.cpp \
+    emptyfoldercleaner.cpp \
     main.cpp \
     ui.cpp \
     vsslogger.cpp \
@@ -39,6 +40,7 @@ HEADERS += \
     camworker.h \
     config.h \
     define.h \
+    emptyfoldercleaner.h \
     ui.h \
     vsslogger.h \
     workmanager.h

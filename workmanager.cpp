@@ -26,7 +26,7 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
     manager = new QNetworkAccessManager(this);
     healthyTimer = new QTimer(this);
     missionTimer = new QTimer(this);
-
+    cleanerTimer = new QTimer(this);
 
     // 2 minute
     healthyTimer->setInterval(120000);
@@ -35,8 +35,13 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
     missionTimer->setInterval(60000);
     missionTimer->setTimerType(Qt::PreciseTimer);
 
+    cleanerTimer->setInterval();
+    cleanerTimer ->setTimerType(Qt::PreciseTimer);
+
     healthyTimer->start();
     missionTimer->start();
+    cleanerTimer->start();
+
     config.loadConfig();
 
     apiController = new APIController(config.baseURL, config.authId, config.secretKey);
@@ -60,6 +65,11 @@ WorkManager::WorkManager(QObject* parent) : QObject(parent)
     // 1분에 한번씩 mission 풀링
     connect(missionTimer, &QTimer::timeout, [&](){
         apiController->pullingMission();
+    });
+
+    // 빈 폴더들 정리
+    connect(cleanerTimer, &QTimer::timeout, [&](){
+
     });
 
     // 풀링 완료시 타이머 stop

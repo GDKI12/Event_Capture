@@ -15,6 +15,7 @@
 #include "config.h"
 #include "define.h"
 #include "vsslogger.h"
+#include "emptyfoldercleaner.h"
 
 const QString PORMPT_FILE_PATH = "../config/prompt.json";
 
@@ -61,6 +62,8 @@ private:
     QList<QString> camIds;
     QNetworkAccessManager *manager;
     APIController* apiController;
+    EmptyFolderCleaner folderCleaner;
+
     VssLogger* logger;
     QFileSystemWatcher watcher;
     QHash<QString, std::shared_ptr<CamWorker>> camWorkers;
@@ -76,6 +79,7 @@ private:
     Mission mission;
     QTimer* healthyTimer;
     QTimer* missionTimer;
+    QTimer* cleanerTimer;
 
     int camN;
 
