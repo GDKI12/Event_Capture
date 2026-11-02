@@ -6,8 +6,6 @@
 #include <QProgressBar>
 #include <QPlainTextEdit>
 
-#include "workmanager.h"
-
 class UI : public QMainWindow
 {
     Q_OBJECT
@@ -20,7 +18,6 @@ public slots:
     void initProgressBar(int);
     void setValueProgressBar(int);
 private:
-    WorkManager manager;
     QProgressBar *progressBar;
     QPlainTextEdit *logDisplay;
 
