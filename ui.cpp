@@ -1,16 +1,24 @@
 #include "ui.h"
+#include "define.h"
+
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 
 UI::UI(QWidget* parent) : QMainWindow(parent)
 {
-    WorkManager manager;
+    connect(&Writter::instance(), &Writter::logWritten, this, &UI::appendLog, Qt::QueuedConnection);
 
     QWidget* centralWidget = new QWidget(this);
     progressBar = new QProgressBar();
 
     logDisplay = new QPlainTextEdit();
     logDisplay->setReadOnly(true);
+
+    QWidget* statusWidget = new QWidget();
+
+    QVBoxLayout *mainLayout = new QVBoxLayout(centralWidget);
+    mainLayout->addWidget(logDisplay);
+    mainLayout->addWidget(statusWidget);
 
 
 

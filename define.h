@@ -51,20 +51,34 @@ struct RawFileInfo{
 
 Q_DECLARE_METATYPE(LogLevel)
 
-class Writter
+class Writter : public QObject
 {
+    Q_OBJECT
 public:
-  static void write(const QString& content, LogLevel level = LogLevel::INFO)
-  {
-      QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss.zzz");
 
-      if(level == LogLevel::INFO)
-          qDebug().noquote().nospace() << timestamp << "[INFO] " << content;
-      else if(level == LogLevel::WARN)
-          qWarning().noquote().nospace() << "\033[33m" << timestamp << "[WARN] " << content;
-      else if(level == LogLevel::ERROR)
-          qCritical().noquote().nospace() << "\033[31m" << timestamp << "[ERROR] " << content;
-  }
+    static Writter& instance()
+    {
+        static Writter logger;
+        return logger;
+    }
+
+    static void write(const QString& content, LogLevel level = LogLevel::INFO)
+    {
+        QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss.zzz");
+
+        if(level == LogLevel::INFO)
+            qDebug().noquote().nospace() << timestamp << "[INFO] " << content;
+        else if(level == LogLevel::WARN)
+            qWarning().noquote().nospace() << "\033[33m" << timestamp << "[WARN] " << content;
+        else if(level == LogLevel::ERROR)
+            qCritical().noquote().nospace() << "\033[31m" << timestamp << "[ERROR] " << content;
+
+        const QString tag =
+                level == LogLevel::INFO ? "[INFO]" : (level == LogLevel::WARN ? "[WARN]" : "[ERROR]");
+
+        emit instance().logWritten(timestamp + tag + content);
+
+    }
 
   static void info(const QString& content)
   {
@@ -80,5 +94,8 @@ public:
   {
       write(content, LogLevel::ERROR);
   }
+
+signals:
+  void logWritten(const QString& line);
 };
 #endif // DEFINE_H

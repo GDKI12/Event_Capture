@@ -20,6 +20,7 @@ public slots:
     void initProgressBar(int);
     void setValueProgressBar(int);
 private:
+    WorkManager manager;
     QProgressBar *progressBar;
     QPlainTextEdit *logDisplay;
 
