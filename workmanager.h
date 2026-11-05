@@ -42,11 +42,11 @@ private:
 signals:
     // 클립 추론 요청
     void requestInfer(const QString& camId, const QString& videoPath);
-
     // 클립 추론 종료
     void finishInfer(const QString& camId);
-
+    // 추론결과로 해당 scene처리
     void requestToProcessSensor(const QString& camId, QStringList text);
+    //
 
 public slots:
     void startFileMode();

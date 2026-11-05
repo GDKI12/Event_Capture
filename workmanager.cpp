@@ -251,8 +251,6 @@ void WorkManager::infer(const QString& camId, const QString& videoPath)
                 // 현재 배치를 먼저 저장/삭제한 뒤 다음 배치를 시작한다.
                 emit requestToProcessSensor(camId, reasoning.split("\n\n"));
 
-                if(!stopping && requestMissionId == mission.id)
-                    emit finishInfer(camId);
             }
             else
             {
@@ -788,6 +786,8 @@ void WorkManager::processSensor(const QString& camId, QStringList text)
         if(missionCnt >= mission.targetScenes)
             missionFinish(mission.id);
     }
+
+    emit finishInfer(camId);
 
 }
 
