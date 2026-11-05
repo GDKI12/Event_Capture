@@ -17,21 +17,23 @@ void EmptyFolderCleaner::deleteEmptyFolder(QDir dir)
 
     for(QFileInfo fi : subDirList)
     {
-        deleteEmptyFolder(QDir(fi.absoluteFilePath()));
-    }
+        QDir subDir(fi.absoluteFilePath());
+        deleteEmptyFolder(subDir);
 
-    QFileInfoList remainingList = dir.entryInfoList(
+        QFileInfoList remainingList = subDir.entryInfoList(
                 QDir::AllEntries |
                 QDir::NoDotAndDotDot |
                 QDir::Hidden |
                 QDir::System);
 
-    if(remainingList.isEmpty())
-    {
-        if(dir.rmdir(dir.absolutePath()))
-            Writter::info("Success to remove folder("+dir.absolutePath()+")");
-        else
-            Writter::info("Fail to remove folder("+dir.absolutePath()+")");
+        // Only remove children so the directory passed by the caller is preserved.
+        if(remainingList.isEmpty())
+        {
+            if(subDir.rmdir(subDir.absolutePath()))
+                Writter::info("Success to remove folder("+subDir.absolutePath()+")");
+            else
+                Writter::info("Fail to remove folder("+subDir.absolutePath()+")");
+        }
     }
 
 }
