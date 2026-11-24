@@ -1,4 +1,4 @@
-QT       += core gui
+QT       += core gui network
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -29,12 +29,16 @@ LIBS += -L/usr/local/lib -liceoryx_hoofs -liceoryx_platform -liceoryx_posh -lice
 SOURCES += \
     main.cpp \
     mainwindow.cpp \
+    missioncontroller.cpp \
+    missionwidget.cpp \
     videowidget.cpp \
     workmanager.cpp
 
 HEADERS += \
     Define.h \
     mainwindow.h \
+    missioncontroller.h \
+    missionwidget.h \
     videowidget.h \
     workmanager.h
 

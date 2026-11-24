@@ -27,6 +27,7 @@ public slots:
     void acknowledgeFrame();
 
 signals:
+    void configurationLoaded(const QString& configPath);
     void cameraNamesChanged(const QStringList& cameraNames);
     void frameReady(const QString& cameraName, const QImage& image);
     void streamUnavailable(const QString& cameraName);

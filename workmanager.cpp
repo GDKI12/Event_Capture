@@ -40,6 +40,7 @@ void WorkManager::initConfig()
         }
     }
     if (configPath.isEmpty()) {
+        emit configurationLoaded(QString());
         emit logMessage(tr("[ERROR] config/config.ini 파일을 찾을 수 없습니다."));
         emit cameraNamesChanged({});
         return;
@@ -52,6 +53,7 @@ void WorkManager::initConfig()
     secretKey = settings.value("setting/secret_key").toString();
     rootPath = settings.value("setting/root_path").toString();
     savePath = settings.value("setting/save_path").toString();
+    emit configurationLoaded(configPath);
 
     // cam_list is the current config key; retain support for older files.
     const auto configuredCameras = settings.value("setting/cam_list",

@@ -8,6 +8,7 @@ class QPlainTextEdit;
 class QThread;
 class VideoWidget;
 class WorkManager;
+class MissionController;
 
 class MainWindow : public QMainWindow
 {
@@ -30,5 +31,6 @@ private:
     QPlainTextEdit* logView = nullptr;
     QThread* receiverThread = nullptr;
     WorkManager* workManager = nullptr;
+    MissionController* missionController = nullptr;
 };
 #endif // MAINWINDOW_H

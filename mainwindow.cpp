@@ -1,6 +1,8 @@
 #include "mainwindow.h"
 #include "videowidget.h"
 #include "workmanager.h"
+#include "missioncontroller.h"
+#include "missionwidget.h"
 
 #include <QComboBox>
 #include <QDateTime>
@@ -48,9 +50,13 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto* rightWidget = new QFrame(central);
     rightWidget->setObjectName("rightWidget");
-    rightWidget->setMinimumWidth(100);
+    rightWidget->setMinimumWidth(260);
     rightWidget->setStyleSheet("QFrame#rightWidget { background: white; border: 1px solid #315578; }");
-    content->addWidget(rightWidget, 1);
+    auto* missionLayout = new QVBoxLayout(rightWidget);
+    missionLayout->setContentsMargins(0, 0, 0, 0);
+    auto* missionWidget = new MissionWidget(rightWidget);
+    missionLayout->addWidget(missionWidget);
+    content->addWidget(rightWidget, 2);
     layout->addLayout(content, 4);
 
     auto* logPanel = new QFrame(central);
@@ -72,6 +78,12 @@ MainWindow::MainWindow(QWidget *parent)
 
     receiverThread = new QThread(this);
     workManager = new WorkManager;
+    missionController = new MissionController(this);
+    connect(workManager, &WorkManager::configurationLoaded, missionController, &MissionController::start);
+    connect(missionController, &MissionController::missionUpdated, missionWidget, &MissionWidget::showMission);
+    connect(missionController, &MissionController::missionCheckFailed, missionWidget, &MissionWidget::showCheckFailed);
+    connect(missionController, &MissionController::heartbeatStatusChanged, missionWidget, &MissionWidget::showHeartbeatStatus);
+    connect(missionController, &MissionController::logMessage, this, &MainWindow::appendLog);
     workManager->moveToThread(receiverThread);
     connect(receiverThread, &QThread::started, workManager, &WorkManager::start);
     connect(receiverThread, &QThread::finished, workManager, &QObject::deleteLater);
@@ -107,6 +119,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    missionController->stop();
     if (receiverThread->isRunning()) {
         QMetaObject::invokeMethod(workManager, "stop", Qt::BlockingQueuedConnection);
         receiverThread->quit();
