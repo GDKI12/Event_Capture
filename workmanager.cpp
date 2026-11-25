@@ -1,4 +1,5 @@
 #include "workmanager.h"
+#include "missionprocessor.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -53,6 +54,8 @@ void WorkManager::initConfig()
     secretKey = settings.value("setting/secret_key").toString();
     rootPath = settings.value("setting/root_path").toString();
     savePath = settings.value("setting/save_path").toString();
+    if (processor)
+        processor->configure(configPath);
     emit configurationLoaded(configPath);
 
     // cam_list is the current config key; retain support for older files.
@@ -95,6 +98,14 @@ void WorkManager::start()
 {
     if (connectionTimer || receiveTimer)
         return;
+    if (!processor) {
+        processor = new MissionProcessor(this);
+        connect(processor, &MissionProcessor::logMessage, this, &WorkManager::logMessage);
+        connect(processor, &MissionProcessor::statusChanged, this, &WorkManager::processingStatusChanged);
+        connect(processor, &MissionProcessor::progressChanged, this, &WorkManager::missionProgressChanged);
+        connect(processor, &MissionProcessor::inferenceResult, this, &WorkManager::inferenceResult);
+        connect(processor, &MissionProcessor::completionRequested, this, &WorkManager::missionCompletionRequested);
+    }
     initConfig();
     if (!configValid)
         return;
@@ -148,6 +159,8 @@ bool WorkManager::init()
 
 void WorkManager::stop()
 {
+    if (processor)
+        processor->stop();
     if (connectionTimer)
         connectionTimer->stop();
     if (receiveTimer)
@@ -163,6 +176,8 @@ void WorkManager::selectCamera(const QString& cameraName)
         return;
     }
     currCamName = cameraName;
+    if (processor)
+        processor->selectCamera(cameraName);
     framePending = false;
     streamStatus.clear();
     lastFrame.invalidate();
@@ -190,10 +205,12 @@ void WorkManager::setStreamStatus(const QString& status)
 void WorkManager::receiveGrabFrame()
 {
     auto* subscriber = camSubscribers.value(currCamName, nullptr);
-    if (!subscriber || framePending)
+    if (!subscriber)
         return;
 
     if (subscriber->getSubscriptionState() != iox::SubscribeState::SUBSCRIBED) {
+        if (processor)
+            processor->streamInterrupted();
         const QString status = tr("[WARN] %1: 카메라 publisher 연결 대기 중").arg(currCamName);
         if (streamStatus != status)
             emit streamUnavailable(currCamName);
@@ -206,6 +223,8 @@ void WorkManager::receiveGrabFrame()
         if (result.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
             setStreamStatus(tr("[ERROR] %1: iceoryx 프레임 수신 오류").arg(currCamName));
         } else if (!lastFrame.isValid() || lastFrame.elapsed() > 2000) {
+            if (processor)
+                processor->streamInterrupted();
             const QString status = tr("[WARN] %1: 영상 프레임 수신 대기 중").arg(currCamName);
             if (streamStatus != status)
                 emit streamUnavailable(currCamName);
@@ -258,13 +277,34 @@ void WorkManager::receiveGrabFrame()
             return;
         }
         lastFrame.start();
+        if (processor)
+            processor->receiveFrame(currCamName, image, frame.timestamp);
         setStreamStatus(tr("[INFO] %1: 영상 수신 중 (%2 × %3)")
                         .arg(currCamName).arg(frame.width).arg(frame.height));
         // Only one queued image may be in flight, even if painting is slower.
-        framePending = true;
-        emit frameReady(currCamName, image);
+        if (!framePending) {
+            framePending = true;
+            emit frameReady(currCamName, image);
+        }
     } catch (const cv::Exception& error) {
         setStreamStatus(tr("[ERROR] %1: 영상 변환 실패: %2")
                         .arg(currCamName, QString::fromUtf8(error.what())));
     }
+}
+
+void WorkManager::acceptMission(const QJsonObject& mission)
+{
+    if (!mission.isEmpty()) {
+        auto* subscriber = camSubscribers.value(currCamName, nullptr);
+        if (subscriber)
+            subscriber->releaseQueuedData();
+    }
+    if (processor)
+        processor->acceptMission(mission);
+}
+
+void WorkManager::setPrompts(const QJsonObject& prompts)
+{
+    if (processor)
+        processor->setPrompts(prompts);
 }

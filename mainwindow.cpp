@@ -81,10 +81,16 @@ MainWindow::MainWindow(QWidget *parent)
     missionController = new MissionController(this);
     connect(workManager, &WorkManager::configurationLoaded, missionController, &MissionController::start);
     connect(missionController, &MissionController::missionUpdated, missionWidget, &MissionWidget::showMission);
+    connect(missionController, &MissionController::missionUpdated, workManager, &WorkManager::acceptMission);
+    connect(missionController, &MissionController::promptsUpdated, workManager, &WorkManager::setPrompts);
+    connect(workManager, &WorkManager::missionCompletionRequested, missionController, &MissionController::completeMission);
+    connect(workManager, &WorkManager::processingStatusChanged, missionWidget, &MissionWidget::showProcessingStatus);
+    connect(workManager, &WorkManager::missionProgressChanged, missionWidget, &MissionWidget::showProgress);
     connect(missionController, &MissionController::missionCheckFailed, missionWidget, &MissionWidget::showCheckFailed);
     connect(missionController, &MissionController::heartbeatStatusChanged, missionWidget, &MissionWidget::showHeartbeatStatus);
     connect(missionController, &MissionController::logMessage, this, &MainWindow::appendLog);
     workManager->moveToThread(receiverThread);
+
     connect(receiverThread, &QThread::started, workManager, &WorkManager::start);
     connect(receiverThread, &QThread::finished, workManager, &QObject::deleteLater);
     connect(workManager, &WorkManager::logMessage, this, &MainWindow::appendLog);

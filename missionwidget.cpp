@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QVBoxLayout>
 
 namespace {
@@ -67,6 +68,14 @@ MissionWidget::MissionWidget(QWidget* parent) : QWidget(parent)
     details->setFrameShape(QFrame::NoFrame);
     details->setLineWrapMode(QPlainTextEdit::WidgetWidth);
     layout->addWidget(details, 1);
+    processingStatus = new QLabel(this);
+    processingStatus->setObjectName("processingStatus");
+    processingStatus->setWordWrap(true);
+    layout->addWidget(processingStatus);
+    progress = new QProgressBar(this);
+    progress->setObjectName("missionProgress");
+    progress->hide();
+    layout->addWidget(progress);
     heartbeatStatus = new QLabel(tr("Heartbeat: 연결 확인 중"), this);
     heartbeatStatus->setObjectName("heartbeatStatus");
     heartbeatStatus->setWordWrap(true);
@@ -80,6 +89,8 @@ void MissionWidget::showMission(const QJsonObject& mission)
     if (!hasMission) {
         title->setText(QStringLiteral("No Mission"));
         details->clear();
+        processingStatus->clear();
+        progress->hide();
         return;
     }
 
@@ -123,4 +134,17 @@ void MissionWidget::showCheckFailed(const QString& message)
 void MissionWidget::showHeartbeatStatus(bool success)
 {
     heartbeatStatus->setText(success ? tr("Heartbeat: 정상") : tr("Heartbeat: 실패 · 재시도 대기"));
+}
+
+void MissionWidget::showProcessingStatus(const QString& status)
+{
+    processingStatus->setText(status);
+}
+
+void MissionWidget::showProgress(int saved, int target)
+{
+    progress->setVisible(target > 0);
+    progress->setRange(0, qMax(1, target));
+    progress->setValue(saved);
+    progress->setFormat(QStringLiteral("저장 %1 / %2장면").arg(saved).arg(target));
 }

@@ -3,12 +3,14 @@
 
 #include <QElapsedTimer>
 #include <QImage>
+#include <QJsonObject>
 #include <QMap>
 #include <QObject>
 #include <QStringList>
 #include "Define.h"
 
 class QTimer;
+class MissionProcessor;
 
 class WorkManager : public QObject
 {
@@ -25,6 +27,8 @@ public slots:
     void selectCamera(const QString& cameraName);
     void receiveGrabFrame();
     void acknowledgeFrame();
+    void acceptMission(const QJsonObject& mission);
+    void setPrompts(const QJsonObject& prompts);
 
 signals:
     void configurationLoaded(const QString& configPath);
@@ -32,6 +36,10 @@ signals:
     void frameReady(const QString& cameraName, const QImage& image);
     void streamUnavailable(const QString& cameraName);
     void logMessage(const QString& message);
+    void processingStatusChanged(const QString& status);
+    void missionProgressChanged(int saved, int target);
+    void inferenceResult(const QString& answer);
+    void missionCompletionRequested(const QString& dispatchId);
 
 private:
     void setStreamStatus(const QString& status);
@@ -48,6 +56,7 @@ private:
     bool framePending = false;
     bool waitingForRouDi = false;
     bool configValid = false;
+    MissionProcessor* processor = nullptr;
 
     QString baseURL;
     QString authId;

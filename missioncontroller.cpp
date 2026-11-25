@@ -52,23 +52,27 @@ void MissionController::start(const QString& configPath)
     }
 
     hasMission = false;
+    promptsLoaded = false;
+    activeMissionId.clear();
+    pendingCompletionId.clear();
+    initialHeartbeatSucceeded = false;
     missionError.clear();
     heartbeatError.clear();
     running = true;
-    missionTimer.start(missionInterval);
+    missionTimer.setInterval(missionInterval);
     heartbeatTimer.start(heartbeatInterval);
     emit logMessage(tr("[INFO] 미션 API 시작: 미션 조회 %1초, heartbeat %2초")
                     .arg(missionInterval / 1000.0).arg(heartbeatInterval / 1000.0));
     heartbeat();
-    pollMission();
 }
 
 void MissionController::stop()
 {
     running = false;
+    initialHeartbeatSucceeded = false;
     missionTimer.stop();
     heartbeatTimer.stop();
-    for (QNetworkReply* reply : {missionReply, heartbeatReply}) {
+    for (QNetworkReply* reply : {missionReply, heartbeatReply, promptsReply, completionReply}) {
         if (!reply)
             continue;
         disconnect(reply, nullptr, this, nullptr);
@@ -77,6 +81,8 @@ void MissionController::stop()
     }
     missionReply = nullptr;
     heartbeatReply = nullptr;
+    promptsReply = nullptr;
+    completionReply = nullptr;
 }
 
 QNetworkRequest MissionController::request(const QString& path) const
@@ -119,9 +125,9 @@ void MissionController::reportError(const QString& message, QString& previousErr
 
 void MissionController::pollMission()
 {
-    if (!running || hasMission || missionReply)
+    if (!running || !initialHeartbeatSucceeded || hasMission || missionReply)
         return;
-    auto* reply = network.post(request("/api/devices/missions/pull"), QByteArray());
+    auto* reply = manager.post(request("/api/devices/missions/pull"), QByteArray());
     missionReply = reply;
     setTimeout(reply);
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
@@ -160,6 +166,7 @@ void MissionController::pollMission()
         hasMission = true;
         missionTimer.stop();
         const auto mission = missions.first().toObject();
+        activeMissionId = mission.value("dispatchId").toString();
         emit logMessage(tr("[INFO] 미션 수신: dispatchId=%1").arg(mission.value("dispatchId").toString()));
         emit missionUpdated(mission);
     });
@@ -172,7 +179,7 @@ void MissionController::heartbeat()
     auto heartbeatRequest = request("/api/devices/heartbeat");
     heartbeatRequest.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     const QJsonObject body{{"status", "online"}};
-    auto* reply = network.post(heartbeatRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    auto* reply = manager.post(heartbeatRequest, QJsonDocument(body).toJson(QJsonDocument::Compact));
     heartbeatReply = reply;
     setTimeout(reply);
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
@@ -187,6 +194,84 @@ void MissionController::heartbeat()
         if (!heartbeatError.isEmpty())
             emit logMessage(tr("[INFO] heartbeat 연결 복구"));
         heartbeatError.clear();
+        if (!promptsLoaded)
+            pullPrompts();
+        if (!pendingCompletionId.isEmpty())
+            completeMission(pendingCompletionId);
+        // Start mission polling only after the first successful heartbeat.
+        if (running && !initialHeartbeatSucceeded) {
+            initialHeartbeatSucceeded = true;
+            missionTimer.start();
+            pollMission();
+        }
         emit heartbeatStatusChanged(true);
+    });
+}
+
+void MissionController::pullPrompts()
+{
+    if (!running || promptsReply)
+        return;
+    auto* reply = manager.get(request("/api/devices/common-codes/requirements"));
+    promptsReply = reply;
+    setTimeout(reply);
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        promptsReply = nullptr;
+        reply->deleteLater();
+        QString error = requestError(reply);
+        QJsonParseError parseError;
+        const auto document = QJsonDocument::fromJson(error.isEmpty() ? reply->readAll() : QByteArray(), &parseError);
+        if (error.isEmpty() && (parseError.error != QJsonParseError::NoError || !document.isObject()
+                               || !document.object().value("groups").isArray()))
+            error = tr("시나리오 프롬프트 응답 JSON 형식 오류");
+        if (!error.isEmpty()) {
+            emit logMessage(tr("[ERROR] 프롬프트 조회 실패: %1 (다음 heartbeat 후 재시도)").arg(error));
+            return;
+        }
+        QJsonObject prompts;
+        for (const auto& group : document.object().value("groups").toArray()) {
+            if (group.toObject().value("code").toString() != "scenario")
+                continue;
+            for (const auto& item : group.toObject().value("items").toArray()) {
+                const auto object = item.toObject();
+                const auto code = object.value("code").toString();
+                if (!code.isEmpty())
+                    prompts.insert(code, object.value("collectionPrompt").toString());
+            }
+        }
+        promptsLoaded = true;
+        emit logMessage(tr("[INFO] 서버 시나리오 프롬프트 수신: %1개").arg(prompts.size()));
+        emit promptsUpdated(prompts);
+    });
+}
+
+void MissionController::completeMission(const QString& dispatchId)
+{
+    if (!running || !hasMission || dispatchId.isEmpty() || dispatchId != activeMissionId || completionReply)
+        return;
+    pendingCompletionId = dispatchId;
+    auto completionRequest = request("/api/devices/missions/"
+                                     + QString::fromUtf8(QUrl::toPercentEncoding(dispatchId)) + "/collected");
+    completionRequest.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    auto* reply = manager.post(completionRequest, QByteArray());
+    completionReply = reply;
+    setTimeout(reply);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, dispatchId] {
+        completionReply = nullptr;
+        reply->deleteLater();
+        const auto error = requestError(reply);
+        if (!error.isEmpty()) {
+            emit logMessage(tr("[ERROR] 미션 완료 통보 실패: %1 (다음 heartbeat 후 재시도)").arg(error));
+            return;
+        }
+        if (dispatchId != activeMissionId)
+            return;
+        pendingCompletionId.clear();
+        activeMissionId.clear();
+        hasMission = false;
+        emit logMessage(tr("[INFO] 서버 미션 완료 확인: %1").arg(dispatchId));
+        emit missionCompletionConfirmed(dispatchId);
+        emit missionUpdated(QJsonObject());
+        missionTimer.start();
     });
 }

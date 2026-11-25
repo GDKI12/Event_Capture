@@ -2,13 +2,13 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
-
-class QComboBox;
-class QPlainTextEdit;
-class QThread;
-class VideoWidget;
-class WorkManager;
-class MissionController;
+#include <QThread>
+#include <QComboBox>
+#include <QPlainTextEdit>
+#include "vlmcontroller.h"
+#include "missioncontroller.h"
+#include "workmanager.h"
+#include "videowidget.h"
 
 class MainWindow : public QMainWindow
 {
@@ -32,5 +32,7 @@ private:
     QThread* receiverThread = nullptr;
     WorkManager* workManager = nullptr;
     MissionController* missionController = nullptr;
+    VLMController* vlmController = nullptr;
+
 };
 #endif // MAINWINDOW_H
