@@ -32,7 +32,7 @@ struct CustomCamDataType2{
 
 struct CustomLidarDataType{
     iox::cxx::vector<cv::Point3d, 100000> points;
-    iox::cxx::vector<float, 1000> intensitys;
+    iox::cxx::vector<float, 100000> intensitys;
     int size;
     double timestamp;
 };

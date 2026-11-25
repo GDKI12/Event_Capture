@@ -2,17 +2,18 @@
 #include "missionlogic.h"
 
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
-#include <QJsonDocument>
-#include <QSaveFile>
 #include <QSettings>
 #include <cmath>
 #include <limits>
 
 MissionProcessor::MissionProcessor(QObject* parent) : QObject(parent)
 {
+    lidarWaitTimer.setSingleShot(true);
+    connect(&lidarWaitTimer, &QTimer::timeout, this, [this] {
+        fail(QStringLiteral("라이다 시간 동기화 실패: %1").arg(lastSyncError));
+    });
     connect(&recorder, &ClipRecorder::failed, this, [this](const QString& message, bool retryable) {
         if (!retryable) {
             fail(message);
@@ -30,11 +31,9 @@ MissionProcessor::MissionProcessor(QObject* parent) : QObject(parent)
             emit statusChanged(QStringLiteral("영상 인코딩 마무리 중"));
         }
     });
-    connect(&recorder, &ClipRecorder::ready, this, [this](const QString& path, const QJsonObject& metadata) {
+    connect(&recorder, &ClipRecorder::ready, this, [this](const QString& path, const QJsonObject&) {
         if (stopped || waitingCompletion)
             return;
-        clipMetadata = metadata;
-        clipMetadata.insert("camera", cameraName);
         emit statusChanged(QStringLiteral("VLM 상태 확인 및 추론 중"));
         vlm.isVLMAlive(path, prompt);
     });
@@ -54,6 +53,8 @@ void MissionProcessor::configure(const QString& configPath)
     cacheRoot = QDir(saveRoot).filePath(".event-capture-cache");
     templatePath = QDir(QFileInfo(configPath).absolutePath()).filePath("prompt.json");
     maxGapMs = qMax(101, settings.value("shared_memory/max_frame_gap_ms", 180).toInt());
+    lidarToleranceMs = qMax(1, settings.value("lidar/max_time_diff_ms", 100).toInt());
+    lidarWaitTimer.setInterval(qMax(1, settings.value("lidar/wait_timeout_ms", 2000).toInt()));
     prompts = {};
     vlm.configure(configPath);
 }
@@ -62,8 +63,11 @@ void MissionProcessor::clearClip()
 {
     recorder.cancel();
     vlm.cancel();
+    lidarWaitTimer.stop();
+    archive.clear();
+    sensorPairs = {};
+    acceptedVideo.clear();
     clipDirectory.reset();
-    clipMetadata = {};
     processing = false;
 }
 
@@ -71,6 +75,7 @@ void MissionProcessor::stop()
 {
     stopped = true;
     clearClip();
+    recentLidar.clear();
     mission = {};
     prompt.clear();
     waitingCompletion = false;
@@ -117,7 +122,7 @@ void MissionProcessor::acceptMission(const QJsonObject& value)
     for (int i = 0; i < targetScenes; ++i) {
         QString error;
         const auto destination = MissionLogic::scenePath(saveRoot, storage, i, error);
-        if (destination.isEmpty() || destinations.contains(destination) || QFileInfo::exists(destination)) {
+        if (destination.isEmpty() || destinations.contains(destination) || !SensorArchive::emptyScene(destination)) {
             fail(error.isEmpty() ? QStringLiteral("미션 저장 폴더가 중복되거나 이미 존재합니다.") : error);
             return;
         }
@@ -177,7 +182,7 @@ void MissionProcessor::streamInterrupted()
     }
 }
 
-void MissionProcessor::receiveFrame(const QString& camera, const QImage& image, double timestamp)
+void MissionProcessor::receiveFrame(const QString& camera, const QImage& image, double timestamp, const QByteArray& originalBayer)
 {
     if (stopped || waitingCompletion || prompt.isEmpty() || processing || camera != cameraName || camera.isEmpty())
         return;
@@ -192,46 +197,65 @@ void MissionProcessor::receiveFrame(const QString& camera, const QImage& image, 
             return;
         }
         recorder.begin(clipDirectory->filePath("clip.mp4"), requiredFrames, 10, maxGapMs);
+        archive.begin(clipDirectory->path(), lidarToleranceMs);
     }
     recorder.append(image, timestamp);
+    // append() may reject a discontinuous frame and clear the current clip.
+    if (!clipDirectory || !recorder.isActive())
+        return;
+    QString error;
+    if (!archive.addImage(originalBayer, image.width(), image.height(), timestamp, error)) {
+        fail(error);
+        return;
+    }
+    if (archive.imageCount() == 1) {
+        for (const auto& lidar : recentLidar) {
+            if (!archive.addLidar(lidar.second, lidar.first, error)) {
+                fail(error);
+                return;
+            }
+        }
+    }
+    if (archive.imageCount() == requiredFrames)
+        archive.finishImages();
 }
 
-bool MissionProcessor::saveClip(const QString& videoPath, const QString& answer, double seconds, QString& error)
+void MissionProcessor::receiveLidar(const QByteArray& xyzi, double timestamp)
+{
+    if (stopped || waitingCompletion)
+        return;
+    recentLidar.append({timestamp, xyzi});
+    while (recentLidar.size() > 4)
+        recentLidar.removeFirst();
+    if (!clipDirectory)
+        return;
+    QString error;
+    if (!archive.addLidar(xyzi, timestamp, error)) {
+        fail(error);
+        return;
+    }
+    if (!acceptedVideo.isEmpty())
+        finishAcceptedClip();
+}
+
+bool MissionProcessor::saveClip(QString& error)
 {
     const auto destination = MissionLogic::scenePath(saveRoot, mission.value("storageTarget").toObject(), savedScenes, error);
     if (destination.isEmpty())
         return false;
     const auto parent = QFileInfo(destination).absolutePath();
-    if (QFileInfo::exists(destination) || !QDir().mkpath(parent)) {
+    if (!SensorArchive::emptyScene(destination) || !QDir().mkpath(parent)) {
         error = QStringLiteral("저장 폴더가 이미 존재하거나 생성할 수 없습니다: %1").arg(destination);
         return false;
     }
     QTemporaryDir staging(QDir(parent).filePath(".scene-XXXXXX"));
-    if (!staging.isValid() || !QFile::copy(videoPath, staging.filePath("video.mp4"))) {
-        error = QStringLiteral("클립 영상 저장 실패");
+    if (!staging.isValid()) {
+        error = QStringLiteral("센서 파일 저장용 임시 폴더 생성 실패");
         return false;
     }
-    auto metadata = clipMetadata;
-    metadata.insert("mission", mission);
-    metadata.insert("prompt", prompt);
-    metadata.insert("answer", answer);
-    metadata.insert("inferenceSeconds", seconds);
-    QSaveFile result(staging.filePath("inference.json"));
-    const auto json = QJsonDocument(metadata).toJson(QJsonDocument::Indented);
-    if (!result.open(QIODevice::WriteOnly) || result.write(json) != json.size() || !result.commit()) {
-        error = QStringLiteral("추론 결과 저장 실패");
+    if (!archive.stage(staging.path(), sensorPairs, error)
+        || !SensorArchive::commitScene(staging.path(), destination, error))
         return false;
-    }
-    QByteArray csv("frame,timestamp_ms\n");
-    const auto timestamps = clipMetadata.value("timestamps").toArray();
-    for (int i = 0; i < timestamps.size(); ++i)
-        csv += QByteArray::number(i) + ',' + QByteArray::number(timestamps.at(i).toDouble(), 'f', 3) + '\n';
-    QSaveFile frames(staging.filePath("frames.csv"));
-    if (!frames.open(QIODevice::WriteOnly) || frames.write(csv) != csv.size() || !frames.commit()
-        || !QDir().rename(staging.path(), destination)) {
-        error = QStringLiteral("프레임 정보 저장 또는 장면 폴더 확정 실패");
-        return false;
-    }
     emit logMessage(QStringLiteral("[INFO] 조건 일치 클립 저장: %1").arg(destination));
     return true;
 }
@@ -244,16 +268,34 @@ void MissionProcessor::processAnswer(const QString& videoPath, const QString& an
     emit logMessage(QStringLiteral("[INFO] 추론 결과 (%1초):\n%2").arg(seconds, 0, 'f', 1).arg(answer));
     QString reason;
     if (MissionLogic::matches(mission, answer, reason)) {
-        QString error;
-        if (!saveClip(videoPath, answer, seconds, error)) {
-            fail(error);
-            return;
-        }
-        ++savedScenes;
-        emit progressChanged(savedScenes, targetScenes);
+        acceptedVideo = videoPath;
+        finishAcceptedClip();
+        return;
     } else {
         emit logMessage(QStringLiteral("[INFO] 조건 불일치 클립 제외: %1").arg(reason));
     }
+    clearClip();
+    emit statusChanged(QStringLiteral("새 클립 수집 대기"));
+}
+
+void MissionProcessor::finishAcceptedClip()
+{
+    if (acceptedVideo.isEmpty() || stopped)
+        return;
+    if (!archive.match(sensorPairs, lastSyncError)) {
+        if (!lidarWaitTimer.isActive())
+            lidarWaitTimer.start();
+        emit statusChanged(QStringLiteral("라이다 시간 동기화 대기"));
+        return;
+    }
+    lidarWaitTimer.stop();
+    QString error;
+    if (!saveClip(error)) {
+        fail(error);
+        return;
+    }
+    ++savedScenes;
+    emit progressChanged(savedScenes, targetScenes);
     clearClip();
     if (savedScenes == targetScenes) {
         waitingCompletion = true;

@@ -1,5 +1,6 @@
 #include "workmanager.h"
 #include "missionprocessor.h"
+#include "sensordata.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -147,8 +148,12 @@ bool WorkManager::init()
         const auto encodedName = name.toUtf8();
         const iox::capro::IdString_t service{iox::cxx::TruncateToCapacity, encodedName.constData()};
         camSubscribers.insert(name, new Subscriber<CustomCamDataType>({service, "Data", "Image"}, options));
+        rawSubscribers.insert(name, new Subscriber<CustomCamDataType>({service, "Data", "RawImage"}, options));
         emit logMessage(tr("[INFO] 카메라 구독: %1 / Data / Image").arg(name));
     }
+    options.queueCapacity = 8U;
+    lidarSubscriber = new Subscriber<CustomLidarDataType>({"lidar", "Data", "Points"}, options);
+    emit logMessage(tr("[INFO] 원본 BayerRG8 구독: cam / Data / RawImage, 라이다 구독: lidar / Data / Points"));
     receiveTimer = new QTimer(this);
     receiveTimer->setTimerType(Qt::PreciseTimer);
     receiveTimer->setInterval(33);
@@ -167,6 +172,10 @@ void WorkManager::stop()
         receiveTimer->stop();
     qDeleteAll(camSubscribers);
     camSubscribers.clear();
+    qDeleteAll(rawSubscribers);
+    rawSubscribers.clear();
+    delete lidarSubscriber;
+    lidarSubscriber = nullptr;
 }
 
 void WorkManager::selectCamera(const QString& cameraName)
@@ -176,6 +185,8 @@ void WorkManager::selectCamera(const QString& cameraName)
         return;
     }
     currCamName = cameraName;
+    rawStatus.clear();
+    lastRawFrame.invalidate();
     if (processor)
         processor->selectCamera(cameraName);
     framePending = false;
@@ -185,6 +196,9 @@ void WorkManager::selectCamera(const QString& cameraName)
         auto* subscriber = camSubscribers.value(cameraName, nullptr);
         if (subscriber)
             subscriber->releaseQueuedData();
+        auto* raw = rawSubscribers.value(cameraName, nullptr);
+        if (raw)
+            raw->releaseQueuedData();
         emit logMessage(tr("[INFO] 카메라 선택: %1").arg(cameraName));
     }
 }
@@ -204,13 +218,13 @@ void WorkManager::setStreamStatus(const QString& status)
 
 void WorkManager::receiveGrabFrame()
 {
+    receiveLidarFrames();
+    receiveRawFrame();
     auto* subscriber = camSubscribers.value(currCamName, nullptr);
     if (!subscriber)
         return;
 
     if (subscriber->getSubscriptionState() != iox::SubscribeState::SUBSCRIBED) {
-        if (processor)
-            processor->streamInterrupted();
         const QString status = tr("[WARN] %1: 카메라 publisher 연결 대기 중").arg(currCamName);
         if (streamStatus != status)
             emit streamUnavailable(currCamName);
@@ -223,8 +237,6 @@ void WorkManager::receiveGrabFrame()
         if (result.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
             setStreamStatus(tr("[ERROR] %1: iceoryx 프레임 수신 오류").arg(currCamName));
         } else if (!lastFrame.isValid() || lastFrame.elapsed() > 2000) {
-            if (processor)
-                processor->streamInterrupted();
             const QString status = tr("[WARN] %1: 영상 프레임 수신 대기 중").arg(currCamName);
             if (streamStatus != status)
                 emit streamUnavailable(currCamName);
@@ -277,8 +289,6 @@ void WorkManager::receiveGrabFrame()
             return;
         }
         lastFrame.start();
-        if (processor)
-            processor->receiveFrame(currCamName, image, frame.timestamp);
         setStreamStatus(tr("[INFO] %1: 영상 수신 중 (%2 × %3)")
                         .arg(currCamName).arg(frame.width).arg(frame.height));
         // Only one queued image may be in flight, even if painting is slower.
@@ -298,6 +308,9 @@ void WorkManager::acceptMission(const QJsonObject& mission)
         auto* subscriber = camSubscribers.value(currCamName, nullptr);
         if (subscriber)
             subscriber->releaseQueuedData();
+        auto* raw = rawSubscribers.value(currCamName, nullptr);
+        if (raw)
+            raw->releaseQueuedData();
     }
     if (processor)
         processor->acceptMission(mission);
@@ -307,4 +320,84 @@ void WorkManager::setPrompts(const QJsonObject& prompts)
 {
     if (processor)
         processor->setPrompts(prompts);
+}
+
+void WorkManager::receiveRawFrame()
+{
+    auto* subscriber = rawSubscribers.value(currCamName, nullptr);
+    if (!processor || !processor->wantsFrames() || !subscriber)
+        return;
+    auto report = [this](const QString& status) {
+        if (rawStatus != status) {
+            rawStatus = status;
+            emit logMessage(status);
+        }
+    };
+    if (subscriber->getSubscriptionState() != iox::SubscribeState::SUBSCRIBED) {
+        report(tr("[WARN] %1: 원본 RAW publisher 대기 (Data / RawImage). 송신 프로그램의 RAW 채널을 확인하세요.").arg(currCamName));
+        processor->streamInterrupted();
+        emit processingStatusChanged(tr("원본 Bayer RAW 수신 대기"));
+        return;
+    }
+    auto result = subscriber->take();
+    if (result.has_error()) {
+        if (lastRawFrame.isValid() && lastRawFrame.elapsed() > 1000) {
+            processor->streamInterrupted();
+            report(tr("[WARN] %1: 원본 RAW 프레임 수신 중단").arg(currCamName));
+        }
+        return;
+    }
+    const auto& sample = result.value();
+    if (sample.getChunkHeader()->userPayloadSize() < sizeof(CustomCamDataType)) {
+        report(tr("[ERROR] 원본 RAW 공유 메모리 구조 크기가 다릅니다."));
+        return;
+    }
+    QString error;
+    const auto image = SensorData::bayerImage(*sample, error);
+    if (image.isNull()) {
+        report(tr("[ERROR] 원본 RAW 변환 실패: %1").arg(error));
+        return;
+    }
+    const auto& frame = *sample;
+    lastRawFrame.start();
+    // The archive writes this borrowed payload synchronously before the sample is released.
+    const auto bayer = QByteArray::fromRawData(reinterpret_cast<const char*>(frame.data), int(frame.width * frame.height));
+    processor->receiveFrame(currCamName, image, frame.timestamp, bayer);
+    rawStatus.clear();
+}
+
+void WorkManager::receiveLidarFrames()
+{
+    if (!processor || !lidarSubscriber)
+        return;
+    auto report = [this](const QString& status) {
+        if (lidarStatus != status) {
+            lidarStatus = status;
+            emit logMessage(status);
+        }
+    };
+    if (lidarSubscriber->getSubscriptionState() != iox::SubscribeState::SUBSCRIBED) {
+        if (processor->wantsFrames())
+            report(tr("[WARN] lidar / Data / Points 연결 대기 중"));
+        return;
+    }
+    for (int i = 0; i < 8; ++i) {
+        auto result = lidarSubscriber->take();
+        if (result.has_error())
+            break;
+        const auto& sample = result.value();
+        if (sample.getChunkHeader()->userPayloadSize() < sizeof(CustomLidarDataType)) {
+            report(tr("[ERROR] 라이다 공유 메모리 구조 크기가 다릅니다. intensity 배열 용량을 확인하세요."));
+            continue;
+        }
+        QString error;
+        const auto bytes = SensorData::lidarBin(*sample, error);
+        const double timestamp = SensorData::timestampMs(sample->timestamp);
+        if (bytes.isEmpty() || timestamp <= 0) {
+            report(tr("[ERROR] 라이다 수신 데이터 오류: %1").arg(error));
+            continue;
+        }
+        processor->receiveLidar(bytes, timestamp);
+        lidarStatus.clear();
+    }
 }

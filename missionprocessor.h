@@ -3,8 +3,10 @@
 
 #include "cliprecorder.h"
 #include "vlmcontroller.h"
+#include "sensorarchive.h"
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <memory>
 
 class MissionProcessor : public QObject
@@ -17,7 +19,9 @@ public:
     void acceptMission(const QJsonObject& value);
     void setPrompts(const QJsonObject& value);
     void selectCamera(const QString& camera);
-    void receiveFrame(const QString& camera, const QImage& image, double timestamp);
+    void receiveFrame(const QString& camera, const QImage& image, double timestamp, const QByteArray& originalBayer);
+    void receiveLidar(const QByteArray& xyzi, double timestamp);
+    bool wantsFrames() const { return !stopped && !waitingCompletion && !prompt.isEmpty() && !processing && !cameraName.isEmpty(); }
     void streamInterrupted();
     void stop();
 
@@ -33,13 +37,20 @@ private:
     void clearClip();
     void fail(const QString& message);
     void processAnswer(const QString& videoPath, const QString& answer, double seconds);
-    bool saveClip(const QString& videoPath, const QString& answer, double seconds, QString& error);
+    void finishAcceptedClip();
+    bool saveClip(QString& error);
 
     ClipRecorder recorder;
     VLMController vlm;
+    SensorArchive archive;
+    QTimer lidarWaitTimer;
+    QVector<QPair<double, QByteArray>> recentLidar;
+    QJsonArray sensorPairs;
+    QString acceptedVideo;
+    QString lastSyncError;
+    int lidarToleranceMs = 100;
     QJsonObject mission;
     QJsonObject prompts;
-    QJsonObject clipMetadata;
     QString cameraName;
     QString saveRoot;
     QString cacheRoot;

@@ -27,19 +27,31 @@ LIBS += -L/usr/local/lib -lopencv_world
 LIBS += -L/usr/local/lib -liceoryx_hoofs -liceoryx_platform -liceoryx_posh -liceoryx_posh_config -liceoryx_posh_gateway -liceoryx_posh_roudi
 
 SOURCES += \
+    cliprecorder.cpp \
     main.cpp \
     mainwindow.cpp \
     missioncontroller.cpp \
+    missionlogic.cpp \
+    missionprocessor.cpp \
     missionwidget.cpp \
+    sensorarchive.cpp \
+    sensordata.cpp \
     videowidget.cpp \
+    vlmcontroller.cpp \
     workmanager.cpp
 
 HEADERS += \
+    cliprecorder.h \
     Define.h \
     mainwindow.h \
     missioncontroller.h \
+    missionlogic.h \
+    missionprocessor.h \
     missionwidget.h \
+    sensorarchive.h \
+    sensordata.h \
     videowidget.h \
+    vlmcontroller.h \
     workmanager.h
 
 # Default rules for deployment.

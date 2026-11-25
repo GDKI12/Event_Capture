@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMap>
@@ -132,7 +133,10 @@ QString MissionLogic::scenePath(const QString& saveRoot, const QJsonObject& stor
         error = QStringLiteral("미션 저장 경로 또는 장면 목록이 잘못되었습니다.");
         return {};
     }
-    QString parent = storage.value("writePath").toString();
+    const QDir base(QFileInfo(saveRoot).absoluteFilePath());
+    QString parent = QDir::cleanPath(storage.value("writePath").toString());
+    if (parent == base.absolutePath() || parent.startsWith(base.absolutePath() + '/'))
+        parent = base.relativeFilePath(parent);
     while (parent.startsWith('/'))
         parent.remove(0, 1);
     const QString relative = scenes.at(index).toObject().value("relativePath").toString();

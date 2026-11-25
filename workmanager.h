@@ -43,14 +43,21 @@ signals:
 
 private:
     void setStreamStatus(const QString& status);
+    void receiveRawFrame();
+    void receiveLidarFrames();
 
     PoshRuntime* _runtime = nullptr;
     QString currCamName;
     QVector<QString> camNameList;
     QMap<QString, Subscriber<CustomCamDataType>*> camSubscribers;
+    QMap<QString, Subscriber<CustomCamDataType>*> rawSubscribers;
+    Subscriber<CustomLidarDataType>* lidarSubscriber = nullptr;
+    QString rawStatus;
+    QString lidarStatus;
     QTimer* receiveTimer = nullptr;
     QTimer* connectionTimer = nullptr;
     QElapsedTimer lastFrame;
+    QElapsedTimer lastRawFrame;
     QString streamStatus;
     QString pixelFormat;
     bool framePending = false;
