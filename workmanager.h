@@ -58,6 +58,7 @@ private:
     QTimer* connectionTimer = nullptr;
     QElapsedTimer lastFrame;
     QElapsedTimer lastRawFrame;
+    QElapsedTimer rawWait;
     QString streamStatus;
     QString pixelFormat;
     bool framePending = false;

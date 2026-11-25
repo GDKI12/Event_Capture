@@ -24,16 +24,20 @@ MissionProcessor::MissionProcessor(QObject* parent) : QObject(parent)
         emit statusChanged(QStringLiteral("수신 대기 · 클립 재수집"));
     });
     connect(&recorder, &ClipRecorder::progress, this, [this](int count, int required) {
-        if (count % 10 == 0 || count == 1)
+        if (count % 10 == 0 || count == 1) {
             emit statusChanged(QStringLiteral("%1 수집 중: %2 / %3프레임").arg(cameraName).arg(count).arg(required));
+            emit logMessage(QStringLiteral("[INFO] %1 RAW 수집: %2 / %3프레임").arg(cameraName).arg(count).arg(required));
+        }
         if (count == required) {
             processing = true;
             emit statusChanged(QStringLiteral("영상 인코딩 마무리 중"));
         }
     });
-    connect(&recorder, &ClipRecorder::ready, this, [this](const QString& path, const QJsonObject&) {
+    connect(&recorder, &ClipRecorder::ready, this, [this](const QString& path, const QJsonObject& metadata) {
         if (stopped || waitingCompletion)
             return;
+        emit logMessage(QStringLiteral("[INFO] MP4 인코딩 완료: %1 (%2프레임)")
+                        .arg(path).arg(metadata.value("frameCount").toInt()));
         emit statusChanged(QStringLiteral("VLM 상태 확인 및 추론 중"));
         vlm.isVLMAlive(path, prompt);
     });
@@ -198,6 +202,8 @@ void MissionProcessor::receiveFrame(const QString& camera, const QImage& image, 
         }
         recorder.begin(clipDirectory->filePath("clip.mp4"), requiredFrames, 10, maxGapMs);
         archive.begin(clipDirectory->path(), lidarToleranceMs);
+        emit logMessage(QStringLiteral("[INFO] %1 원본 RAW 클립 수집 시작: %2초, 목표 %3프레임")
+                        .arg(cameraName).arg(requiredFrames / 10).arg(requiredFrames));
     }
     recorder.append(image, timestamp);
     // append() may reject a discontinuous frame and clear the current clip.

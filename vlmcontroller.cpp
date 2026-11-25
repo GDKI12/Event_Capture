@@ -68,6 +68,7 @@ void VLMController::isVLMAlive(const QString& videoPath, const QString& prompt)
     }
     busy = true;
     const auto token = generation;
+    emit logMessage(QStringLiteral("[INFO] VLM 상태 확인 요청: %1/health").arg(baseUrl));
     auto* reply = manager.get(QNetworkRequest(QUrl(baseUrl + "/health")));
     replies.insert(reply);
     setTimeout(reply, healthTimeoutMs);
@@ -82,6 +83,7 @@ void VLMController::isVLMAlive(const QString& videoPath, const QString& prompt)
             emit failed(QStringLiteral("VLM 상태 확인 실패: %1").arg(message));
             return;
         }
+        emit logMessage(QStringLiteral("[INFO] VLM 상태 확인 성공"));
         infer(videoPath, prompt);
     });
 }

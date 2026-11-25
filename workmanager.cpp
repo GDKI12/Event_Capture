@@ -187,6 +187,7 @@ void WorkManager::selectCamera(const QString& cameraName)
     currCamName = cameraName;
     rawStatus.clear();
     lastRawFrame.invalidate();
+    rawWait.invalidate();
     if (processor)
         processor->selectCamera(cameraName);
     framePending = false;
@@ -325,8 +326,12 @@ void WorkManager::setPrompts(const QJsonObject& prompts)
 void WorkManager::receiveRawFrame()
 {
     auto* subscriber = rawSubscribers.value(currCamName, nullptr);
-    if (!processor || !processor->wantsFrames() || !subscriber)
+    if (!processor || !processor->wantsFrames() || !subscriber) {
+        rawWait.invalidate();
         return;
+    }
+    if (!rawWait.isValid())
+        rawWait.start();
     auto report = [this](const QString& status) {
         if (rawStatus != status) {
             rawStatus = status;
@@ -341,9 +346,18 @@ void WorkManager::receiveRawFrame()
     }
     auto result = subscriber->take();
     if (result.has_error()) {
-        if (lastRawFrame.isValid() && lastRawFrame.elapsed() > 1000) {
+        if (result.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
+            report(tr("[ERROR] %1 / Data / RawImage: 프레임 수신 오류 (%2)")
+                   .arg(currCamName).arg(int(result.get_error())));
+        } else if (rawWait.elapsed() > 1500) {
             processor->streamInterrupted();
-            report(tr("[WARN] %1: 원본 RAW 프레임 수신 중단").arg(currCamName));
+            if (!lastRawFrame.isValid()) {
+                report(tr("[WARN] %1 / Data / RawImage: publisher 연결됨, 최초 RAW 프레임이 오지 않습니다. "
+                          "송신 측 BayerRG8 형식과 RAW publish/loan 로그를 확인하세요.").arg(currCamName));
+            } else {
+                report(tr("[WARN] %1 / Data / RawImage: 원본 RAW 프레임 수신 중단").arg(currCamName));
+            }
+            emit processingStatusChanged(tr("%1: 원본 Bayer RAW 프레임 수신 대기").arg(currCamName));
         }
         return;
     }
@@ -359,7 +373,12 @@ void WorkManager::receiveRawFrame()
         return;
     }
     const auto& frame = *sample;
+    if (!lastRawFrame.isValid() || !rawStatus.isEmpty()) {
+        emit logMessage(tr("[INFO] %1 / Data / RawImage: 원본 RAW 수신 (%2 × %3, timestamp=%4)")
+                        .arg(currCamName).arg(frame.width).arg(frame.height).arg(frame.timestamp, 0, 'f', 3));
+    }
     lastRawFrame.start();
+    rawWait.restart();
     // The archive writes this borrowed payload synchronously before the sample is released.
     const auto bayer = QByteArray::fromRawData(reinterpret_cast<const char*>(frame.data), int(frame.width * frame.height));
     processor->receiveFrame(currCamName, image, frame.timestamp, bayer);
