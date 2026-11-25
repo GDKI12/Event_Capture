@@ -83,6 +83,7 @@ void MissionProcessor::stop()
     mission = {};
     prompt.clear();
     waitingCompletion = false;
+    pendingScenes.clear();
 }
 
 void MissionProcessor::fail(const QString& message)
@@ -123,31 +124,50 @@ void MissionProcessor::acceptMission(const QJsonObject& value)
         return;
     }
     QSet<QString> destinations;
+    QVector<int> remaining;
+    int existingScenes = 0;
     for (int i = 0; i < targetScenes; ++i) {
         QString error;
         const auto destination = MissionLogic::scenePath(saveRoot, storage, i, error);
-        if (destination.isEmpty() || destinations.contains(destination) || !SensorArchive::emptyScene(destination)) {
-            fail(error.isEmpty() ? QStringLiteral("미션 저장 폴더가 중복되거나 이미 존재합니다.") : error);
+        if (destination.isEmpty() || destinations.contains(destination)) {
+            fail(error.isEmpty() ? QStringLiteral("미션 저장 폴더 경로가 중복됩니다: %1").arg(destination) : error);
             return;
         }
         destinations.insert(destination);
+        if (SensorArchive::emptyScene(destination)) {
+            remaining.append(i);
+        } else if (SensorArchive::completedScene(destination, requiredFrames, lidarToleranceMs, maxGapMs, error)) {
+            ++existingScenes;
+            emit logMessage(QStringLiteral("[INFO] 기존 수집 완료 장면 확인: %1").arg(destination));
+        } else {
+            fail(QStringLiteral("기존 장면이 미완성이거나 잘못되었습니다: %1 (%2)").arg(destination, error));
+            return;
+        }
     }
     const auto roadConditions = mission.value("conditions").toObject().value("roadEnvironments").toArray();
-    if (mission.value("deviceType").toString() != "infra" && !roadConditions.isEmpty()
+    if (!remaining.isEmpty() && mission.value("deviceType").toString() != "infra" && !roadConditions.isEmpty()
         && !roadConditions.contains(QJsonValue("any"))) {
         fail(QStringLiteral("차량 미션의 도로 조건 검사에는 GPS 정보가 필요합니다."));
         return;
     }
     stopped = false;
+    pendingScenes = remaining;
+    savedScenes = existingScenes;
     lastPromptError.clear();
-    emit progressChanged(0, targetScenes);
+    emit progressChanged(savedScenes, targetScenes);
+    emit logMessage(QStringLiteral("[INFO] 미션 수집 현황: 기존 완료 %1 / %2장면, 추가 수집 %3장면")
+                    .arg(savedScenes).arg(targetScenes).arg(pendingScenes.size()));
+    if (pendingScenes.isEmpty()) {
+        requestCompletion();
+        return;
+    }
     preparePrompt();
 }
 
 void MissionProcessor::setPrompts(const QJsonObject& value)
 {
     prompts = value;
-    if (!stopped && prompt.isEmpty())
+    if (!stopped && !waitingCompletion && prompt.isEmpty())
         preparePrompt();
 }
 
@@ -246,7 +266,11 @@ void MissionProcessor::receiveLidar(const QByteArray& xyzi, double timestamp)
 
 bool MissionProcessor::saveClip(QString& error)
 {
-    const auto destination = MissionLogic::scenePath(saveRoot, mission.value("storageTarget").toObject(), savedScenes, error);
+    if (pendingScenes.isEmpty()) {
+        error = QStringLiteral("추가 수집할 장면이 없습니다.");
+        return false;
+    }
+    const auto destination = MissionLogic::scenePath(saveRoot, mission.value("storageTarget").toObject(), pendingScenes.first(), error);
     if (destination.isEmpty())
         return false;
     const auto parent = QFileInfo(destination).absolutePath();
@@ -300,14 +324,20 @@ void MissionProcessor::finishAcceptedClip()
         fail(error);
         return;
     }
+    pendingScenes.removeFirst();
     ++savedScenes;
     emit progressChanged(savedScenes, targetScenes);
     clearClip();
     if (savedScenes == targetScenes) {
-        waitingCompletion = true;
-        emit statusChanged(QStringLiteral("저장 완료 · 서버 완료 확인 대기"));
-        emit completionRequested(mission.value("dispatchId").toString());
+        requestCompletion();
     } else {
         emit statusChanged(QStringLiteral("새 클립 수집 대기"));
     }
+}
+
+void MissionProcessor::requestCompletion()
+{
+    waitingCompletion = true;
+    emit statusChanged(QStringLiteral("저장 완료 · 서버 완료 확인 대기"));
+    emit completionRequested(mission.value("dispatchId").toString());
 }

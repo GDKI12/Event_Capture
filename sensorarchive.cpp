@@ -148,6 +148,64 @@ bool SensorArchive::emptyScene(const QString& path)
     return true;
 }
 
+bool SensorArchive::completedScene(const QString& path, int requiredFrames, int toleranceMs, int maxGapMs, QString& error)
+{
+    error.clear();
+    const QFileInfo scene(path);
+    const auto entries = QDir(path).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot, QDir::Name);
+    if (!scene.isDir() || scene.isSymLink() || entries != QStringList({"image", "lidar"})) {
+        error = QStringLiteral("image/lidar 폴더 구성이 올바르지 않습니다.");
+        return false;
+    }
+    SensorArchive existing;
+    existing.tolerance = toleranceMs;
+    existing.imagesFinished = true;
+    qint64 rawSize = 0;
+    QMap<double, Image> sortedImages;
+    for (const QString& channel : {QStringLiteral("image"), QStringLiteral("lidar")}) {
+        const QFileInfo folder(QDir(path).filePath(channel));
+        if (!folder.isDir() || folder.isSymLink() || !folder.isReadable()) {
+            error = QStringLiteral("센서 폴더를 읽을 수 없습니다: %1").arg(channel);
+            return false;
+        }
+        const auto files = QDir(folder.absoluteFilePath()).entryInfoList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+        const bool image = channel == "image";
+        if (requiredFrames < 1 || (image && files.size() != requiredFrames) || (!image && (files.isEmpty() || files.size() > requiredFrames))) {
+            error = QStringLiteral("%1 파일 수가 미션 길이와 맞지 않습니다: %2개 (이미지 목표 %3프레임)")
+                        .arg(channel).arg(files.size()).arg(requiredFrames);
+            return false;
+        }
+        for (const auto& file : files) {
+            bool timestampOk = false;
+            const qint64 timestamp = file.completeBaseName().toLongLong(&timestampOk);
+            const qint64 size = file.size();
+            if (!file.isFile() || file.isSymLink() || !file.isReadable() || !timestampOk || timestamp <= 0 || timestamp > 9000000000000000LL
+                || file.suffix() != (image ? "raw" : "bin") || size <= 0
+                || (image ? (size % 3 != 0 || size > 2048LL * 1536 * 3 || (rawSize && rawSize != size)) : size % 16 != 0)
+                || (image ? sortedImages.contains(double(timestamp)) : existing.lidars.contains(double(timestamp)))) {
+                error = QStringLiteral("센서 파일 형식, 크기 또는 타임스탬프가 잘못되었습니다: %1").arg(file.absoluteFilePath());
+                return false;
+            }
+            if (image) {
+                rawSize = size;
+                sortedImages.insert(double(timestamp), {double(timestamp), file.fileName(), 0, 0});
+            } else {
+                existing.lidars.insert(double(timestamp), file.fileName());
+            }
+        }
+    }
+    existing.images = sortedImages.values().toVector();
+    for (int i = 1; i < existing.images.size(); ++i) {
+        if (existing.images.at(i).timestamp - existing.images.at(i - 1).timestamp > maxGapMs) {
+            error = QStringLiteral("저장된 이미지 타임스탬프가 연속되지 않습니다.");
+            return false;
+        }
+    }
+    // Multiple image frames may share one nearest lidar sample; saved BINs are deduplicated.
+    QJsonArray pairs;
+    return existing.match(pairs, error);
+}
+
 bool SensorArchive::commitScene(const QString& staging, const QString& destination, QString& error)
 {
     if (!emptyScene(destination)) {

@@ -20,6 +20,7 @@ public:
     bool stage(const QString& destination, const QJsonArray& pairs, QString& error);
     int imageCount() const { return images.size(); }
     static bool emptyScene(const QString& path);
+    static bool completedScene(const QString& path, int requiredFrames, int toleranceMs, int maxGapMs, QString& error);
     static bool commitScene(const QString& staging, const QString& destination, QString& error);
 
 private:

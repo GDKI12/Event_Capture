@@ -38,6 +38,7 @@ private:
     void fail(const QString& message);
     void processAnswer(const QString& videoPath, const QString& answer, double seconds);
     void finishAcceptedClip();
+    void requestCompletion();
     bool saveClip(QString& error);
 
     ClipRecorder recorder;
@@ -61,6 +62,7 @@ private:
     int requiredFrames = 0;
     int targetScenes = 0;
     int savedScenes = 0;
+    QVector<int> pendingScenes;
     int maxGapMs = 180;
     bool processing = false;
     bool stopped = true;
