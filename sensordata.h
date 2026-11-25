@@ -9,7 +9,8 @@
 namespace SensorData {
 QByteArray lidarBin(const CustomLidarDataType& frame, QString& error);
 double timestampMs(double timestamp);
-QImage bayerImage(const CustomCamDataType& frame, QString& error);
+QImage cameraImage(const CustomCamDataType& frame, const QString& pixelFormat, QString& error);
+QByteArray bgrBytes(const QImage& image);
 }
 
 #endif

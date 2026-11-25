@@ -36,11 +36,11 @@ void SensorArchive::begin(const QString& directory, int toleranceMs)
     tolerance = toleranceMs;
 }
 
-bool SensorArchive::addImage(const QByteArray& bayer, int width, int height, double timestamp, QString& error)
+bool SensorArchive::addImage(const QByteArray& bgr, int width, int height, double timestamp, QString& error)
 {
-    if (root.isEmpty() || width <= 0 || height <= 0 || qint64(width) * height != bayer.size()
+    if (root.isEmpty() || width <= 0 || height <= 0 || quint64(width) * height * 3 != quint64(bgr.size())
         || !std::isfinite(timestamp) || timestamp <= 0 || timestamp > 9e15) {
-        error = QStringLiteral("원본 BayerRG8 프레임 크기 또는 타임스탬프가 잘못되었습니다.");
+        error = QStringLiteral("BGR8 RAW 프레임 크기 또는 타임스탬프가 잘못되었습니다.");
         return false;
     }
     const auto folder = QDir(root).filePath("image");
@@ -49,7 +49,7 @@ bool SensorArchive::addImage(const QByteArray& bayer, int width, int height, dou
         error = QStringLiteral("RAW 이미지 폴더 생성 실패 또는 타임스탬프 중복");
         return false;
     }
-    if (!writeFile(QDir(folder).filePath(filename), bayer, error))
+    if (!writeFile(QDir(folder).filePath(filename), bgr, error))
         return false;
     images.append({timestamp, filename, width, height});
     return true;
@@ -112,7 +112,7 @@ bool SensorArchive::match(QJsonArray& pairs, QString& error) const
 
 bool SensorArchive::stage(const QString& destination, const QJsonArray& pairs, QString& error)
 {
-    // Both directories are under save_path; move the original RAW bytes intact.
+    // Both directories are under save_path; move the packed BGR8 RAW bytes intact.
     if (!QDir().rename(QDir(root).filePath("image"), QDir(destination).filePath("image"))
         || !QDir().mkpath(QDir(destination).filePath("lidar"))) {
         error = QStringLiteral("RAW/BIN 저장 폴더 준비 실패");

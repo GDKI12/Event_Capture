@@ -26,7 +26,7 @@ MissionProcessor::MissionProcessor(QObject* parent) : QObject(parent)
     connect(&recorder, &ClipRecorder::progress, this, [this](int count, int required) {
         if (count % 10 == 0 || count == 1) {
             emit statusChanged(QStringLiteral("%1 수집 중: %2 / %3프레임").arg(cameraName).arg(count).arg(required));
-            emit logMessage(QStringLiteral("[INFO] %1 RAW 수집: %2 / %3프레임").arg(cameraName).arg(count).arg(required));
+            emit logMessage(QStringLiteral("[INFO] %1 / Data / Image 수집: %2 / %3프레임").arg(cameraName).arg(count).arg(required));
         }
         if (count == required) {
             processing = true;
@@ -186,7 +186,7 @@ void MissionProcessor::streamInterrupted()
     }
 }
 
-void MissionProcessor::receiveFrame(const QString& camera, const QImage& image, double timestamp, const QByteArray& originalBayer)
+void MissionProcessor::receiveFrame(const QString& camera, const QImage& image, double timestamp, const QByteArray& packedBgr)
 {
     if (stopped || waitingCompletion || prompt.isEmpty() || processing || camera != cameraName || camera.isEmpty())
         return;
@@ -202,7 +202,7 @@ void MissionProcessor::receiveFrame(const QString& camera, const QImage& image, 
         }
         recorder.begin(clipDirectory->filePath("clip.mp4"), requiredFrames, 10, maxGapMs);
         archive.begin(clipDirectory->path(), lidarToleranceMs);
-        emit logMessage(QStringLiteral("[INFO] %1 원본 RAW 클립 수집 시작: %2초, 목표 %3프레임")
+        emit logMessage(QStringLiteral("[INFO] %1 / Data / Image 클립 수집 시작: %2초, 목표 %3프레임")
                         .arg(cameraName).arg(requiredFrames / 10).arg(requiredFrames));
     }
     recorder.append(image, timestamp);
@@ -210,7 +210,7 @@ void MissionProcessor::receiveFrame(const QString& camera, const QImage& image, 
     if (!clipDirectory || !recorder.isActive())
         return;
     QString error;
-    if (!archive.addImage(originalBayer, image.width(), image.height(), timestamp, error)) {
+    if (!archive.addImage(packedBgr, image.width(), image.height(), timestamp, error)) {
         fail(error);
         return;
     }

@@ -8,8 +8,6 @@
 #include <QSettings>
 #include <QTimer>
 
-#include <limits>
-
 // Probe RouDi before initRuntime(), which otherwise blocks and eventually
 // terminates the process when the daemon is absent (iceoryx 2.90).
 #include "iceoryx_posh/internal/runtime/ipc_interface_user.hpp"
@@ -76,8 +74,7 @@ void WorkManager::initConfig()
             camNameList.append(cameraName);
         }
     }
-    // EdgeInfra Capture publishes converted BGR8 images. The saved RAW files
-    // contain Bayer pixels and have a separate pixel format in the config.
+    // Image is the single camera input for preview, inference and BGR8 RAW storage.
     pixelFormat = settings.value("shared_memory/pixel_format", "bgr8").toString().trimmed().toLower();
     const QStringList supportedFormats = {"bgr8", "rgb8", "mono8", "gray8",
                                          "bayer_rggb8", "bayer_bggr8",
@@ -148,12 +145,11 @@ bool WorkManager::init()
         const auto encodedName = name.toUtf8();
         const iox::capro::IdString_t service{iox::cxx::TruncateToCapacity, encodedName.constData()};
         camSubscribers.insert(name, new Subscriber<CustomCamDataType>({service, "Data", "Image"}, options));
-        rawSubscribers.insert(name, new Subscriber<CustomCamDataType>({service, "Data", "RawImage"}, options));
         emit logMessage(tr("[INFO] 카메라 구독: %1 / Data / Image").arg(name));
     }
     options.queueCapacity = 8U;
     lidarSubscriber = new Subscriber<CustomLidarDataType>({"lidar", "Data", "Points"}, options);
-    emit logMessage(tr("[INFO] 원본 BayerRG8 구독: cam / Data / RawImage, 라이다 구독: lidar / Data / Points"));
+    emit logMessage(tr("[INFO] 라이다 구독: lidar / Data / Points"));
     receiveTimer = new QTimer(this);
     receiveTimer->setTimerType(Qt::PreciseTimer);
     receiveTimer->setInterval(33);
@@ -172,8 +168,6 @@ void WorkManager::stop()
         receiveTimer->stop();
     qDeleteAll(camSubscribers);
     camSubscribers.clear();
-    qDeleteAll(rawSubscribers);
-    rawSubscribers.clear();
     delete lidarSubscriber;
     lidarSubscriber = nullptr;
 }
@@ -185,9 +179,6 @@ void WorkManager::selectCamera(const QString& cameraName)
         return;
     }
     currCamName = cameraName;
-    rawStatus.clear();
-    lastRawFrame.invalidate();
-    rawWait.invalidate();
     if (processor)
         processor->selectCamera(cameraName);
     framePending = false;
@@ -197,9 +188,6 @@ void WorkManager::selectCamera(const QString& cameraName)
         auto* subscriber = camSubscribers.value(cameraName, nullptr);
         if (subscriber)
             subscriber->releaseQueuedData();
-        auto* raw = rawSubscribers.value(cameraName, nullptr);
-        if (raw)
-            raw->releaseQueuedData();
         emit logMessage(tr("[INFO] 카메라 선택: %1").arg(cameraName));
     }
 }
@@ -220,12 +208,13 @@ void WorkManager::setStreamStatus(const QString& status)
 void WorkManager::receiveGrabFrame()
 {
     receiveLidarFrames();
-    receiveRawFrame();
     auto* subscriber = camSubscribers.value(currCamName, nullptr);
     if (!subscriber)
         return;
 
     if (subscriber->getSubscriptionState() != iox::SubscribeState::SUBSCRIBED) {
+        if (processor)
+            processor->streamInterrupted();
         const QString status = tr("[WARN] %1: 카메라 publisher 연결 대기 중").arg(currCamName);
         if (streamStatus != status)
             emit streamUnavailable(currCamName);
@@ -238,6 +227,8 @@ void WorkManager::receiveGrabFrame()
         if (result.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
             setStreamStatus(tr("[ERROR] %1: iceoryx 프레임 수신 오류").arg(currCamName));
         } else if (!lastFrame.isValid() || lastFrame.elapsed() > 2000) {
+            if (processor)
+                processor->streamInterrupted();
             const QString status = tr("[WARN] %1: 영상 프레임 수신 대기 중").arg(currCamName);
             if (streamStatus != status)
                 emit streamUnavailable(currCamName);
@@ -251,55 +242,30 @@ void WorkManager::receiveGrabFrame()
         setStreamStatus(tr("[ERROR] %1: CustomCamDataType과 다른 프레임 크기입니다.").arg(currCamName));
         return;
     }
-    const auto& frame = *sample;
-    const bool threeChannels = pixelFormat == "bgr8" || pixelFormat == "rgb8";
-    const quint64 bytes = quint64(frame.width) * frame.height * (threeChannels ? 3U : 1U);
-    if (frame.width == 0 || frame.height == 0
-        || frame.width > quint32(std::numeric_limits<int>::max() / 3)
-        || frame.height > quint32(std::numeric_limits<int>::max())
-        || bytes > sizeof(frame.data)) {
-        setStreamStatus(tr("[ERROR] %1: 잘못된 프레임 해상도 (%2 × %3)")
-                        .arg(currCamName).arg(frame.width).arg(frame.height));
+    consumeImageFrame(*sample);
+}
+
+void WorkManager::consumeImageFrame(const CustomCamDataType& frame)
+{
+    QString error;
+    const auto image = SensorData::cameraImage(frame, pixelFormat, error);
+    if (image.isNull()) {
+        setStreamStatus(tr("[ERROR] %1: 영상 변환 실패: %2").arg(currCamName, error));
         return;
     }
-
-    try {
-        const cv::Mat raw(int(frame.height), int(frame.width), threeChannels ? CV_8UC3 : CV_8UC1,
-                          const_cast<uint8_t*>(frame.data));
-        cv::Mat rgb;
-        if (pixelFormat == "rgb8")
-            rgb = raw;
-        else if (pixelFormat == "bgr8")
-            cv::cvtColor(raw, rgb, cv::COLOR_BGR2RGB);
-        else if (pixelFormat == "mono8" || pixelFormat == "gray8")
-            cv::cvtColor(raw, rgb, cv::COLOR_GRAY2RGB);
-        // OpenCV 4.5 uses two-letter names: BG corresponds to an RGGB mosaic.
-        else if (pixelFormat == "bayer_rggb8")
-            cv::cvtColor(raw, rgb, cv::COLOR_BayerBG2RGB);
-        else if (pixelFormat == "bayer_bggr8")
-            cv::cvtColor(raw, rgb, cv::COLOR_BayerRG2RGB);
-        else if (pixelFormat == "bayer_grbg8")
-            cv::cvtColor(raw, rgb, cv::COLOR_BayerGB2RGB);
-        else
-            cv::cvtColor(raw, rgb, cv::COLOR_BayerGR2RGB);
-
-        // The iceoryx sample is released on return; the UI must own its pixels.
-        const QImage image = QImage(rgb.data, rgb.cols, rgb.rows, int(rgb.step), QImage::Format_RGB888).copy();
-        if (image.isNull()) {
-            setStreamStatus(tr("[ERROR] %1: 영상 이미지 생성 실패").arg(currCamName));
-            return;
-        }
-        lastFrame.start();
-        setStreamStatus(tr("[INFO] %1: 영상 수신 중 (%2 × %3)")
-                        .arg(currCamName).arg(frame.width).arg(frame.height));
-        // Only one queued image may be in flight, even if painting is slower.
-        if (!framePending) {
-            framePending = true;
-            emit frameReady(currCamName, image);
-        }
-    } catch (const cv::Exception& error) {
-        setStreamStatus(tr("[ERROR] %1: 영상 변환 실패: %2")
-                        .arg(currCamName, QString::fromUtf8(error.what())));
+    lastFrame.start();
+    // The selected Image sample drives inference independently of preview painting.
+    if (processor && processor->wantsFrames()) {
+        const auto bgr = pixelFormat == "bgr8"
+            ? QByteArray::fromRawData(reinterpret_cast<const char*>(frame.data), int(frame.width * frame.height * 3))
+            : SensorData::bgrBytes(image);
+        processor->receiveFrame(currCamName, image, frame.timestamp, bgr);
+    }
+    setStreamStatus(tr("[INFO] %1: 영상 수신 중 (%2 × %3)")
+                    .arg(currCamName).arg(frame.width).arg(frame.height));
+    if (!framePending) {
+        framePending = true;
+        emit frameReady(currCamName, image);
     }
 }
 
@@ -309,9 +275,6 @@ void WorkManager::acceptMission(const QJsonObject& mission)
         auto* subscriber = camSubscribers.value(currCamName, nullptr);
         if (subscriber)
             subscriber->releaseQueuedData();
-        auto* raw = rawSubscribers.value(currCamName, nullptr);
-        if (raw)
-            raw->releaseQueuedData();
     }
     if (processor)
         processor->acceptMission(mission);
@@ -321,68 +284,6 @@ void WorkManager::setPrompts(const QJsonObject& prompts)
 {
     if (processor)
         processor->setPrompts(prompts);
-}
-
-void WorkManager::receiveRawFrame()
-{
-    auto* subscriber = rawSubscribers.value(currCamName, nullptr);
-    if (!processor || !processor->wantsFrames() || !subscriber) {
-        rawWait.invalidate();
-        return;
-    }
-    if (!rawWait.isValid())
-        rawWait.start();
-    auto report = [this](const QString& status) {
-        if (rawStatus != status) {
-            rawStatus = status;
-            emit logMessage(status);
-        }
-    };
-    if (subscriber->getSubscriptionState() != iox::SubscribeState::SUBSCRIBED) {
-        report(tr("[WARN] %1: 원본 RAW publisher 대기 (Data / RawImage). 송신 프로그램의 RAW 채널을 확인하세요.").arg(currCamName));
-        processor->streamInterrupted();
-        emit processingStatusChanged(tr("원본 Bayer RAW 수신 대기"));
-        return;
-    }
-    auto result = subscriber->take();
-    if (result.has_error()) {
-        if (result.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
-            report(tr("[ERROR] %1 / Data / RawImage: 프레임 수신 오류 (%2)")
-                   .arg(currCamName).arg(int(result.get_error())));
-        } else if (rawWait.elapsed() > 1500) {
-            processor->streamInterrupted();
-            if (!lastRawFrame.isValid()) {
-                report(tr("[WARN] %1 / Data / RawImage: publisher 연결됨, 최초 RAW 프레임이 오지 않습니다. "
-                          "송신 측 BayerRG8 형식과 RAW publish/loan 로그를 확인하세요.").arg(currCamName));
-            } else {
-                report(tr("[WARN] %1 / Data / RawImage: 원본 RAW 프레임 수신 중단").arg(currCamName));
-            }
-            emit processingStatusChanged(tr("%1: 원본 Bayer RAW 프레임 수신 대기").arg(currCamName));
-        }
-        return;
-    }
-    const auto& sample = result.value();
-    if (sample.getChunkHeader()->userPayloadSize() < sizeof(CustomCamDataType)) {
-        report(tr("[ERROR] 원본 RAW 공유 메모리 구조 크기가 다릅니다."));
-        return;
-    }
-    QString error;
-    const auto image = SensorData::bayerImage(*sample, error);
-    if (image.isNull()) {
-        report(tr("[ERROR] 원본 RAW 변환 실패: %1").arg(error));
-        return;
-    }
-    const auto& frame = *sample;
-    if (!lastRawFrame.isValid() || !rawStatus.isEmpty()) {
-        emit logMessage(tr("[INFO] %1 / Data / RawImage: 원본 RAW 수신 (%2 × %3, timestamp=%4)")
-                        .arg(currCamName).arg(frame.width).arg(frame.height).arg(frame.timestamp, 0, 'f', 3));
-    }
-    lastRawFrame.start();
-    rawWait.restart();
-    // The archive writes this borrowed payload synchronously before the sample is released.
-    const auto bayer = QByteArray::fromRawData(reinterpret_cast<const char*>(frame.data), int(frame.width * frame.height));
-    processor->receiveFrame(currCamName, image, frame.timestamp, bayer);
-    rawStatus.clear();
 }
 
 void WorkManager::receiveLidarFrames()

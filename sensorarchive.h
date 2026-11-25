@@ -13,7 +13,7 @@ class SensorArchive
 public:
     void begin(const QString& directory, int toleranceMs);
     void clear();
-    bool addImage(const QByteArray& bayer, int width, int height, double timestamp, QString& error);
+    bool addImage(const QByteArray& bgr, int width, int height, double timestamp, QString& error);
     bool addLidar(const QByteArray& xyzi, double timestamp, QString& error);
     void finishImages() { imagesFinished = true; }
     bool match(QJsonArray& pairs, QString& error) const;

@@ -19,7 +19,7 @@ public:
     void acceptMission(const QJsonObject& value);
     void setPrompts(const QJsonObject& value);
     void selectCamera(const QString& camera);
-    void receiveFrame(const QString& camera, const QImage& image, double timestamp, const QByteArray& originalBayer);
+    void receiveFrame(const QString& camera, const QImage& image, double timestamp, const QByteArray& packedBgr);
     void receiveLidar(const QByteArray& xyzi, double timestamp);
     bool wantsFrames() const { return !stopped && !waitingCompletion && !prompt.isEmpty() && !processing && !cameraName.isEmpty(); }
     void streamInterrupted();

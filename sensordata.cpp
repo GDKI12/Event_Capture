@@ -45,21 +45,60 @@ double SensorData::timestampMs(double timestamp)
     return timestamp;
 }
 
-QImage SensorData::bayerImage(const CustomCamDataType& frame, QString& error)
+QImage SensorData::cameraImage(const CustomCamDataType& frame, const QString& pixelFormat, QString& error)
 {
     error.clear();
-    if (frame.width < 2 || frame.height < 2 || frame.width > 2048 || frame.height > 1536
-        || quint64(frame.width) * frame.height > sizeof(frame.data)) {
-        error = QStringLiteral("원본 BayerRG8 해상도가 잘못되었습니다.");
+    const bool threeChannels = pixelFormat == "bgr8" || pixelFormat == "rgb8";
+    const quint64 bytes = quint64(frame.width) * frame.height * (threeChannels ? 3U : 1U);
+    if (frame.width == 0 || frame.height == 0 || frame.width > 2048 || frame.height > 1536
+        || bytes > sizeof(frame.data)) {
+        error = QStringLiteral("영상 해상도 또는 공유 메모리 데이터 크기가 잘못되었습니다.");
         return {};
     }
     try {
-        const cv::Mat raw(int(frame.height), int(frame.width), CV_8UC1, const_cast<uint8_t*>(frame.data));
+        const cv::Mat raw(int(frame.height), int(frame.width), threeChannels ? CV_8UC3 : CV_8UC1,
+                          const_cast<uint8_t*>(frame.data));
         cv::Mat rgb;
-        cv::cvtColor(raw, rgb, cv::COLOR_BayerBG2RGB);
+        if (pixelFormat == "bgr8")
+            cv::cvtColor(raw, rgb, cv::COLOR_BGR2RGB);
+        else if (pixelFormat == "rgb8")
+            rgb = raw;
+        else if (pixelFormat == "mono8" || pixelFormat == "gray8")
+            cv::cvtColor(raw, rgb, cv::COLOR_GRAY2RGB);
+        else if (pixelFormat == "bayer_rggb8")
+            cv::cvtColor(raw, rgb, cv::COLOR_BayerBG2RGB);
+        else if (pixelFormat == "bayer_bggr8")
+            cv::cvtColor(raw, rgb, cv::COLOR_BayerRG2RGB);
+        else if (pixelFormat == "bayer_grbg8")
+            cv::cvtColor(raw, rgb, cv::COLOR_BayerGB2RGB);
+        else if (pixelFormat == "bayer_gbrg8")
+            cv::cvtColor(raw, rgb, cv::COLOR_BayerGR2RGB);
+        else {
+            error = QStringLiteral("지원하지 않는 Image 픽셀 형식: %1").arg(pixelFormat);
+            return {};
+        }
         return QImage(rgb.data, rgb.cols, rgb.rows, int(rgb.step), QImage::Format_RGB888).copy();
     } catch (const cv::Exception& exception) {
         error = QString::fromUtf8(exception.what());
         return {};
     }
+}
+
+QByteArray SensorData::bgrBytes(const QImage& image)
+{
+    if (image.isNull() || quint64(image.width()) * image.height() * 3 > 2147483647U)
+        return {};
+    const auto rgb = image.convertToFormat(QImage::Format_RGB888);
+    QByteArray result;
+    result.resize(rgb.width() * rgb.height() * 3);
+    auto* destination = reinterpret_cast<uchar*>(result.data());
+    for (int row = 0; row < rgb.height(); ++row) {
+        const auto* source = rgb.constScanLine(row);
+        for (int x = 0; x < rgb.width(); ++x) {
+            *destination++ = source[x * 3 + 2];
+            *destination++ = source[x * 3 + 1];
+            *destination++ = source[x * 3];
+        }
+    }
+    return result;
 }
