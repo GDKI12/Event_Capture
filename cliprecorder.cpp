@@ -1,4 +1,5 @@
 #include "cliprecorder.h"
+#include "capturediagnostics.h"
 
 #include <QFileInfo>
 #include <QJsonArray>
@@ -90,6 +91,9 @@ void ClipRecorder::append(const QImage& image, double timestamp)
     }
     if (!timestamps.isEmpty()
         && (timestamp <= timestamps.last() || timestamp - timestamps.last() > gapMs)) {
+        CAPTURE_TRACE(QStringLiteral("frame_gap previous_ms=%1 current_ms=%2 delta_ms=%3 limit_ms=%4 received=%5/%6")
+                .arg(timestamps.last(), 0, 'f', 3).arg(timestamp, 0, 'f', 3)
+                .arg(timestamp - timestamps.last(), 0, 'f', 3).arg(gapMs).arg(timestamps.size()).arg(required));
         fail(QStringLiteral("프레임 누락 또는 시간 역전: 미완성 클립을 다시 수집합니다."), true);
         return;
     }
@@ -123,6 +127,9 @@ void ClipRecorder::append(const QImage& image, double timestamp)
         return;
     }
     timestamps.append(timestamp);
+    CAPTURE_TRACE(QStringLiteral("encoder_input count=%1/%2 timestamp_ms=%3 pending_bytes=%4")
+                  .arg(timestamps.size()).arg(required).arg(timestamp, 0, 'f', 3)
+                  .arg(encoder.bytesToWrite() + startingFrames.size()));
     emit progress(timestamps.size(), required);
     if (timestamps.size() == required)
         finishInput();

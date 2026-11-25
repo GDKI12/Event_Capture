@@ -1,6 +1,7 @@
 #include "workmanager.h"
 #include "missionprocessor.h"
 #include "sensordata.h"
+#include "capturediagnostics.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -184,6 +185,10 @@ void WorkManager::selectCamera(const QString& cameraName)
     framePending = false;
     streamStatus.clear();
     lastFrame.invalidate();
+#ifndef QT_NO_DEBUG
+    debugCameraTimestamp = 0;
+    debugCameraArrival.invalidate();
+#endif
     if (!cameraName.isEmpty()) {
         auto* subscriber = camSubscribers.value(cameraName, nullptr);
         if (subscriber)
@@ -207,6 +212,11 @@ void WorkManager::setStreamStatus(const QString& status)
 
 void WorkManager::receiveGrabFrame()
 {
+#ifndef QT_NO_DEBUG
+    if (debugReceivePoll.isValid() && debugReceivePoll.elapsed() > 100)
+        CAPTURE_TRACE(QStringLiteral("receive_poll_delay poll_gap_ms=%1").arg(debugReceivePoll.elapsed()));
+    debugReceivePoll.start();
+#endif
     receiveLidarFrames();
     auto* subscriber = camSubscribers.value(currCamName, nullptr);
     if (!subscriber)
@@ -222,6 +232,8 @@ void WorkManager::receiveGrabFrame()
         return;
     }
 
+    if (subscriber->hasMissedData())
+        CAPTURE_TRACE(QStringLiteral("iceoryx_queue_overflow channel=%1/Data/Image capacity=1 discarded_old_frames=true").arg(currCamName));
     auto result = subscriber->take();
     if (result.has_error()) {
         if (result.get_error() != iox::popo::ChunkReceiveResult::NO_CHUNK_AVAILABLE) {
@@ -247,6 +259,17 @@ void WorkManager::receiveGrabFrame()
 
 void WorkManager::consumeImageFrame(const CustomCamDataType& frame)
 {
+#ifndef QT_NO_DEBUG
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const auto arrivalMs = debugCameraArrival.isValid() ? debugCameraArrival.elapsed() : 0;
+    debugCameraArrival.start();
+    CAPTURE_TRACE(QStringLiteral("image_receive camera=%1 previous_ms=%2 current_ms=%3 delta_ms=%4 arrival_gap_ms=%5 collecting=%6")
+                  .arg(currCamName).arg(debugCameraTimestamp, 0, 'f', 3).arg(frame.timestamp, 0, 'f', 3)
+                  .arg(debugCameraTimestamp > 0 ? frame.timestamp - debugCameraTimestamp : 0, 0, 'f', 3)
+                  .arg(arrivalMs).arg(processor && processor->wantsFrames()));
+    debugCameraTimestamp = frame.timestamp;
+#endif
     QString error;
     const auto image = SensorData::cameraImage(frame, pixelFormat, error);
     if (image.isNull()) {
@@ -254,6 +277,9 @@ void WorkManager::consumeImageFrame(const CustomCamDataType& frame)
         return;
     }
     lastFrame.start();
+#ifndef QT_NO_DEBUG
+    const auto convertNs = elapsed.nsecsElapsed();
+#endif
     // The selected Image sample drives inference independently of preview painting.
     if (processor && processor->wantsFrames()) {
         const auto bgr = pixelFormat == "bgr8"
@@ -261,6 +287,9 @@ void WorkManager::consumeImageFrame(const CustomCamDataType& frame)
             : SensorData::bgrBytes(image);
         processor->receiveFrame(currCamName, image, frame.timestamp, bgr);
     }
+    CAPTURE_TRACE(QStringLiteral("image_receive_cost camera=%1 convert_ms=%2 enqueue_encode_ms=%3 total_ms=%4")
+                  .arg(currCamName).arg(convertNs / 1e6, 0, 'f', 3)
+                  .arg((elapsed.nsecsElapsed() - convertNs) / 1e6, 0, 'f', 3).arg(elapsed.nsecsElapsed() / 1e6, 0, 'f', 3));
     setStreamStatus(tr("[INFO] %1: 영상 수신 중 (%2 × %3)")
                     .arg(currCamName).arg(frame.width).arg(frame.height));
     if (!framePending) {
@@ -301,6 +330,8 @@ void WorkManager::receiveLidarFrames()
             report(tr("[WARN] lidar / Data / Points 연결 대기 중"));
         return;
     }
+    if (lidarSubscriber->hasMissedData())
+        CAPTURE_TRACE(QStringLiteral("iceoryx_queue_overflow channel=lidar/Data/Points capacity=8 discarded_old_frames=true"));
     for (int i = 0; i < 8; ++i) {
         auto result = lidarSubscriber->take();
         if (result.has_error())
@@ -311,6 +342,10 @@ void WorkManager::receiveLidarFrames()
             continue;
         }
         QString error;
+#ifndef QT_NO_DEBUG
+        QElapsedTimer elapsed;
+        elapsed.start();
+#endif
         const auto bytes = SensorData::lidarBin(*sample, error);
         const double timestamp = SensorData::timestampMs(sample->timestamp);
         if (bytes.isEmpty() || timestamp <= 0) {
@@ -318,6 +353,13 @@ void WorkManager::receiveLidarFrames()
             continue;
         }
         processor->receiveLidar(bytes, timestamp);
+        CAPTURE_TRACE(QStringLiteral("lidar_receive previous_ms=%1 current_ms=%2 delta_ms=%3 bytes=%4 serialize_enqueue_ms=%5")
+                      .arg(debugLidarTimestamp, 0, 'f', 3).arg(timestamp, 0, 'f', 3)
+                      .arg(debugLidarTimestamp > 0 ? timestamp - debugLidarTimestamp : 0, 0, 'f', 3)
+                      .arg(bytes.size()).arg(elapsed.nsecsElapsed() / 1e6, 0, 'f', 3));
+#ifndef QT_NO_DEBUG
+        debugLidarTimestamp = timestamp;
+#endif
         lidarStatus.clear();
     }
 }

@@ -3,7 +3,7 @@
 
 #include "cliprecorder.h"
 #include "vlmcontroller.h"
-#include "sensorarchive.h"
+#include "archivewriter.h"
 #include <QJsonObject>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -38,15 +38,17 @@ private:
     void fail(const QString& message);
     void processAnswer(const QString& videoPath, const QString& answer, double seconds);
     void finishAcceptedClip();
+    void clipSaved(quint64 token, const QString& destination);
     void requestCompletion();
-    bool saveClip(QString& error);
 
     ClipRecorder recorder;
     VLMController vlm;
-    SensorArchive archive;
+    ArchiveWriter writer;
+    quint64 clipToken = 0;
+    int capturedFrames = 0;
+    bool commitPending = false;
     QTimer lidarWaitTimer;
     QVector<QPair<double, QByteArray>> recentLidar;
-    QJsonArray sensorPairs;
     QString acceptedVideo;
     QString lastSyncError;
     int lidarToleranceMs = 100;
@@ -58,7 +60,7 @@ private:
     QString templatePath;
     QString prompt;
     QString lastPromptError;
-    std::unique_ptr<QTemporaryDir> clipDirectory;
+    std::shared_ptr<QTemporaryDir> clipDirectory;
     int requiredFrames = 0;
     int targetScenes = 0;
     int savedScenes = 0;

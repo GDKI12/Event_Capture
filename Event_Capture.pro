@@ -27,6 +27,7 @@ LIBS += -L/usr/local/lib -lopencv_world
 LIBS += -L/usr/local/lib -liceoryx_hoofs -liceoryx_platform -liceoryx_posh -liceoryx_posh_config -liceoryx_posh_gateway -liceoryx_posh_roudi
 
 SOURCES += \
+    archivewriter.cpp \
     cliprecorder.cpp \
     main.cpp \
     mainwindow.cpp \
@@ -41,6 +42,8 @@ SOURCES += \
     workmanager.cpp
 
 HEADERS += \
+    archivewriter.h \
+    capturediagnostics.h \
     cliprecorder.h \
     Define.h \
     mainwindow.h \

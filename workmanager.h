@@ -62,6 +62,12 @@ private:
     bool waitingForRouDi = false;
     bool configValid = false;
     MissionProcessor* processor = nullptr;
+#ifndef QT_NO_DEBUG
+    double debugCameraTimestamp = 0;
+    double debugLidarTimestamp = 0;
+    QElapsedTimer debugCameraArrival;
+    QElapsedTimer debugReceivePoll;
+#endif
 
     QString baseURL;
     QString authId;

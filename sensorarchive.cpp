@@ -4,16 +4,23 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
-#include <QSaveFile>
 #include <QSet>
 #include <cmath>
 
 namespace {
 bool writeFile(const QString& path, const QByteArray& bytes, QString& error)
 {
-    QSaveFile file(path);
-    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+    // These files belong to a private temporary clip. Commit the scene only
+    // after all writes succeed; per-frame fdatasync would stall the disk queue.
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+        error = QStringLiteral("센서 파일 생성 실패: %1 (%2)").arg(path, file.errorString());
+        return false;
+    }
+    if (file.write(bytes) != bytes.size() || !file.flush()) {
         error = QStringLiteral("센서 파일 저장 실패: %1 (%2)").arg(path, file.errorString());
+        file.close();
+        file.remove();
         return false;
     }
     return true;
